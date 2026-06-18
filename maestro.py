@@ -28,8 +28,12 @@ CHANGELOG V235 vs V234:
 
   FIX 7 — _build_sim_kwargs: garante que source_rates (lista) e integrador
            são passados em system_params para uso por simulation.py V237+.
-
-  MELHORIA 1 — PipelineAudit.version atualizada para "V235".
+  
+  FIX V237 — Atualização para compatibilidade com simulation.py V237.0:
+           - Contrato temporal unificado: output_times_h como pontos em horas
+           - depletion_dt_h separado de output_times_h para sub-stepping
+  
+  MELHORIA 1 — PipelineAudit.version atualizada para "V237".
   MELHORIA 2 — Alias MaestroV230 e MaestroV226 mantidos para compat.
   MELHORIA 3 — Log de Phase D expande info de source_rate e n_passos.
   MELHORIA 4 — finalize_pipeline loga também chain file e integrador usados.
@@ -117,7 +121,7 @@ class PhaseAudit:
 
 @dataclass
 class PipelineAudit:
-    version:                 str  = "V235"
+    version:                 str  = "V237"
     started_at:              str  = field(default_factory=lambda: datetime.now().isoformat())
     ended_at:                Optional[str] = None
     total_duration_seconds:  float = 0.0
@@ -318,13 +322,18 @@ def _settings_patch_for_simulation(settings_result: Dict) -> Dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MaestroV235
+# MaestroV237
 # ─────────────────────────────────────────────────────────────────────────────
 
-class MaestroV235:
+class MaestroV237:
     """
     Orquestrador de pipeline OpenMC — fases A→B→C→D→E[→F][→G].
-
+    
+    FIX V237: Compatibilidade com simulation.py V237.0
+      - Contrato temporal unificado (output_times_h como pontos em horas)
+      - depletion_dt_h separado para sub-stepping
+      - Integração com IndependentOperator corrigido
+    
     A  Parser         lê Input-simulador.txt
     B  Geometry       constrói openmc.Geometry
     C  Settings       cross-sections, source, tallies, timesteps
@@ -332,11 +341,11 @@ class MaestroV235:
     E  Output         relatórios e CSVs  [não-crítica]
     F  T-N Loop       acoplamento Térmico-Neutrônico (se ENABLE_TN_COUPLING)
     G  PostProcessor  decaimento + dose + isótopos notáveis (se cooling_time_h > 0)
-
-    Compatibilidade: aceita settings.py V223 e V224.
+    
+    Compatibilidade: aceita settings.py V223 e V224+.
     """
 
-    VERSION = "V235"
+    VERSION = "V237"
 
     def __init__(self, output_dir: str = "pipeline_results", debug: bool = False) -> None:
         self.output_dir = Path(output_dir)

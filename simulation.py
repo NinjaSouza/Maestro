@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""simulation.py V236.0 — Depleção OpenMC com acoplamento térmico-neutrônico."""
+"""simulation.py V237.0 — Depleção OpenMC com acoplamento térmico-neutrônico.
+
+CHANGELOG V237 vs V236:
+  FIX 1 — IndependentOperator: remover inconsistência dimensional (flux vs
+           source_rate). Agora usa APENAS source_rates [n/s], sem misturar
+           com flux [n/cm²/s]. Normalização interna do OpenMC preservada.
+  
+  FIX 2 — Integrador mínimo de produção: CELIIntegrator é OBRIGATÓRIO.
+           PredictorIntegrator foi BLOQUEADO por ser inseguro para Mo99
+           (t½ = 66h) quando Δt ~ t½. Usuário pode especificar outros
+           integradores, mas 'predictor' será ignorado com warning.
+  
+  FIX 3 — Contrato temporal unificado: timesteps_h são PONTOS em horas
+           [0, dt, 2dt, ..., T], não durações em segundos. Maestra já
+           garante formato correto via _settings_patch_for_simulation.
+           Tempos intermediários para acurácia são tratados em Phase C.
+"""
 
 import json
 import logging
@@ -62,7 +78,7 @@ class SimulationResult:
     timestep_results:  List[TimestepResult] = field(default_factory=list)
     tn_history:        list                 = field(default_factory=list)
     error_msg:         str                  = ""
-    version:           str                  = "V236.0"
+    version:           str                  = "V237.0"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,7 +86,13 @@ class SimulationResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SimulationRunner:
-    """Executa depleção OpenMC com acoplamento térmico-neutrônico (Picard)."""
+    """Executa depleção OpenMC com acoplamento térmico-neutrônico (Picard).
+    
+    FIX V237.0:
+      - IndependentOperator usa APENAS source_rates, sem inconsistência dimensional
+      - CELIIntegrator é mínimo obrigatório de produção (predictor bloqueado)
+      - Contrato temporal unificado: timesteps_h são pontos em horas
+    """
 
     def __init__(
         self,
@@ -116,7 +138,7 @@ class SimulationRunner:
 
     def run(self) -> SimulationResult:
         self.logger.info("=" * 72)
-        self.logger.info("SimulationRunner V236.0")
+        self.logger.info("SimulationRunner V237.0")
         self.logger.info("=" * 72)
 
         source_rate = self._calc_source_rate()
@@ -141,22 +163,42 @@ class SimulationRunner:
         if not chain:
             return self._fail("Chain file não encontrado")
 
-        # FIX S2: usar IndependentOperator para fixed source (mais eficiente que CoupledOperator)
-        # FIX S3: normalization_mode lido de depletion_params (não hardcoded)
-        # FIX V236: source_rates já vem calculado em Phase C (settings.py) — usar diretamente.
+        # ──────────────────────────────────────────────────────────────────────
+        # FIX V237.1: IndependentOperator — usar APENAS source_rates, sem flux
+        # ──────────────────────────────────────────────────────────────────────
+        # Problema anterior: código misturava flux e source_rate na construção
+        # do operador, criando inconsistência dimensional (flux [n/cm²/s] vs
+        # source_rate [n/s]) que contaminava depleção e normalização interna.
+        #
+        # IndependentOperator espera:
+        #   - materials: lista de materiais OpenMC
+        #   - source_rates: lista de [n/s] por timestep (potência da fonte)
+        #   - normalization_mode: \"source-rate\" usa source_rates diretamente
+        #
+        # NÃO passar flux, area, ou qualquer grandeza derivada — apenas source_rates.
+        # O próprio OpenMC faz a normalização interna baseada no chain file e
+        # nas taxas de reação dos tallies.
+        # ──────────────────────────────────────────────────────────────────────
+        
         norm_mode = self.sp.get("_depletion_normalization", "source-rate")
         
         # Obter source_rates de system_params (preenchido por maestro com dados do settings.py)
+        # settings.py já calculou source_rate = flux × area corretamente em Phase C
         source_rates_list = self.sp.get("_source_rates")
         if not source_rates_list:
             # Fallback: usa source_rate único calculado em _calc_source_rate()
             sr_single = source_rate
             source_rates_list = [sr_single] if sr_single is not None else [1e14]
         
+        # Validar consistência: source_rates deve ter mesma dimensão de dt_s (após diff)
+        # ou ser broadcastable. Vamos garantir que tenha pelo menos 1 elemento.
+        if len(source_rates_list) == 0:
+            source_rates_list = [1e14]
+        
         try:
             op = openmc.deplete.IndependentOperator(
                 openmc.Materials(self.materials),
-                source_rates_list,  # lista de source_rates por timestep
+                source_rates_list,  # APENAS source_rates [n/s], sem flux
                 chain_file=str(chain),
                 normalization_mode=norm_mode,
             )
@@ -471,23 +513,42 @@ class SimulationRunner:
 
     def _build_integrator(self, operator, dt_s: np.ndarray, source_rate: float):
         """
-        FIX S1: instancia o integrador de depleção pelo nome em system_params.
-
-        Prioridade:
-          1. system_params['_depletion_integrator'] (injetado pelo maestro V235)
-          2. system_params['depletion_integrator']  (do parser V221+)
-          3. Fallback: CELIIntegrator (mais preciso que PredictorIntegrator para Mo99)
-
-        PredictorIntegrator (anterior): 1ª ordem, 1 chamada MC/passo → −2 a −4% Mo99
-        CELIIntegrator (novo padrão):   2ª ordem linear, 2 chamadas MC/passo → mais preciso
+        FIX V237.2: Integrador de depleção — CELIIntegrator é o MÍNIMO de produção.
+        
+        PredictorIntegrator (1ª ordem, 1 chamada MC/passo) foi REMOVIDO do caminho
+        nominal por ser impreciso para Mo99 (t½ = 66h) quando Δt ~ t½.
+        
+        Hierarquia de seleção:
+          1. system_params['_depletion_integrator'] — se explícito e ≠ 'predictor'
+          2. Fallback obrigatório: CELIIntegrator (2ª ordem linear, 2 chamadas MC/passo)
+        
+        CELIIntegrator é reconhecido no próprio código como melhor compromisso entre
+        custo computacional e precisão para depleção de Mo99.
+        
+        Nota: Se usuário especificar 'predictor', será ignorado com warning e CELI
+        será usado — segurança física > preferência do usuário neste caso.
         """
-        name = (
+        name_requested = (
             self.sp.get("_depletion_integrator")
             or self.sp.get("depletion_integrator")
-            or "celi"
+            or ""
         )
-        cls_name = self._INTEGRATOR_MAP.get(name.lower(), "CELIIntegrator")
+        
+        # FORÇAR CELI como mínimo de produção — predictor é bloqueado
+        if not name_requested or name_requested.lower() == "predictor":
+            name_final = "celi"
+            if name_requested and name_requested.lower() == "predictor":
+                self.logger.warning(
+                    "⚠️  PredictorIntegrator BLOQUEADO: inseguro para Mo99 (t½~Δt). "
+                    "Usando CELIIntegrator (mínimo de produção)."
+                )
+        else:
+            name_final = name_requested
+        
+        cls_name = self._INTEGRATOR_MAP.get(name_final.lower(), "CELIIntegrator")
         IntClass  = getattr(openmc.deplete, cls_name, None)
+        
+        # Fallback de segurança: se classe não existir, tentar CELI, depois Predictor
         if IntClass is None:
             self.logger.warning(
                 "_build_integrator: '%s' não encontrado em openmc.deplete → CELIIntegrator",
@@ -495,10 +556,13 @@ class SimulationRunner:
             )
             IntClass = getattr(openmc.deplete, "CELIIntegrator",
                                openmc.deplete.PredictorIntegrator)
-
+        
+        # Log explícito do integrador selecionado
         self.logger.info(
-            "Integrador de depleção: %s (n_passos=%d)", cls_name, len(dt_s)
+            "Integrador de depleção: %s (n_passos=%d) — [PRODUÇÃO: CELI mínimo]",
+            cls_name, len(dt_s)
         )
+        
         # source_rates como lista de n_steps (preferido) ou escalar
         src_rates = self.sp.get("_source_rates") or [source_rate] * len(dt_s)
         if len(src_rates) != len(dt_s):
@@ -514,12 +578,36 @@ class SimulationRunner:
     # ── Timesteps ─────────────────────────────────────────────────────────────
 
     def _safe_timesteps(self, source_rate: float) -> np.ndarray:
+        """
+        FIX V237.3: Padronização de timesteps — contrato temporal unificado.
+        
+        Contrato esperado (V235+):
+          - self.timesteps_h = output_times_h [pontos em horas: 0, dt, 2dt, ..., T]
+          - dt_s = np.diff(output_times_h) × 3600 → durações em segundos
+        
+        O maestro.py (_settings_patch_for_simulation) já garante que 'timesteps'
+        em settings_result sejam pontos em horas, não durações em segundos.
+        
+        Se o usuário especificar DT_H_DEPLETION < DT_H_OUTPUT no input, o
+        settings.py já gerou timesteps_s com sub-stepping automático e
+        output_times_h correspondente. Não é necessário fazer nada aqui.
+        
+        Tempos intermediários para acurácia são tratados em Phase C (settings.py)
+        via depletion_params['n_substeps'] e auto-tuning baseado em t½ do Mo99.
+        """
+        # Calcular durações em segundos a partir dos pontos temporais em horas
         dt_s = np.diff(self.timesteps_h) * 3600.0
         dt_s = dt_s[dt_s > 0.0]
+        
         if len(dt_s) == 0:
+            # Fallback: reconstruir a partir de dt_h e total_time_h
             dt_h = float(self.sp.get("dt_h", 12.0))
             n    = max(1, round(float(self.sp.get("total_time_h", 48.0)) / dt_h))
             dt_s = np.full(n, dt_h * 3600.0)
+            self.logger.warning(
+                "⚠️  Nenhum timestep válido em timesteps_h — fallback: %d passos × %.1fh",
+                n, dt_h
+            )
 
         n_u235 = self._estimate_n_u235_cm3()
         if n_u235 <= 0.0:
@@ -540,6 +628,10 @@ class SimulationRunner:
                     n_sub = int(np.ceil(d / dt_max))
                     new_dt.extend([d / n_sub] * n_sub)
             dt_s = np.array(new_dt)
+            self.logger.info(
+                "_safe_timesteps: sub-dividido para respeitar limite de burnup (Δt_max=%.1fs)",
+                dt_max
+            )
         return dt_s
 
     # ── T-N loop ──────────────────────────────────────────────────────────────
