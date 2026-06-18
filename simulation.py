@@ -143,11 +143,20 @@ class SimulationRunner:
 
         # FIX S2: usar IndependentOperator para fixed source (mais eficiente que CoupledOperator)
         # FIX S3: normalization_mode lido de depletion_params (não hardcoded)
+        # FIX V236: source_rates já vem calculado em Phase C (settings.py) — usar diretamente.
         norm_mode = self.sp.get("_depletion_normalization", "source-rate")
+        
+        # Obter source_rates de system_params (preenchido por maestro com dados do settings.py)
+        source_rates_list = self.sp.get("_source_rates")
+        if not source_rates_list:
+            # Fallback: usa source_rate único calculado em _calc_source_rate()
+            sr_single = source_rate
+            source_rates_list = [sr_single] if sr_single is not None else [1e14]
+        
         try:
             op = openmc.deplete.IndependentOperator(
                 openmc.Materials(self.materials),
-                [flux * self._calc_source_rate() / flux if (flux := float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))) else 1.0],
+                source_rates_list,  # lista de source_rates por timestep
                 chain_file=str(chain),
                 normalization_mode=norm_mode,
             )
@@ -802,13 +811,24 @@ class SimulationRunner:
         return result
 
     def _calc_source_rate(self) -> Optional[float]:
+        # FIX V236: source_rate JÁ FOI CALCULADO EM settings.py (única fonte de verdade).
+        # Esta função agora apenas recupera o valor pré-calculado passado via system_params.
+        # O cálculo flux × x × y deve ser feito UMA ÚNICA VEZA em settings.py.
+        
+        # Tenta obter source_rate já calculado em Phase C (settings.py)
+        sr = self.sp.get("source_rate")
+        if sr is not None and sr >= 1.0:
+            return float(sr)
+        
+        # Fallback para backward compat (caso settings.py antigo não tenha passado)
         x    = float(self.sp.get("wafer_x_cm", self.sp.get("x", 1.69)))
         y    = float(self.sp.get("wafer_y_cm", self.sp.get("y", 1.69)))
         flux = float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))
         sr   = flux * x * y
         if sr < 1.0:
-            self.logger.error("source_rate=%.3e < 1 n/s", sr)
+            self.logger.error("source_rate=%.3e < 1 n/s (fallback)", sr)
             return None
+        self.logger.warning("_calc_source_rate: usando fallback (Phase C não passou source_rate)")
         return sr
 
     def _estimate_n_u235_cm3(self) -> float:

@@ -601,13 +601,23 @@ class MaestroV235:
         if "wafer_y_cm" not in _spar:
             _spar["wafer_y_cm"] = _wg.get("y_cm", 1.69)
 
-        # FIX V235: injetar depletion_params em system_params
+        # FIX V235/V236: injetar depletion_params e source_rate em system_params
         dep = settings_result.get("depletion_params", {})
+        src_params = settings_result.get("source_params", {})
+        
         if dep:
             _spar["_depletion_integrator"]    = dep.get("integrator", "")
             _spar["_depletion_normalization"] = dep.get("normalization", "")
             _spar["_source_rates"]            = dep.get("source_rates", [])
             _spar["_timesteps_s"]             = dep.get("timesteps_s", [])
+        
+        # FIX V236: source_rate de Phase C é a única fonte de verdade
+        # settings.py já calculou flux × area corretamente uma única vez
+        if src_params and "strength" in src_params:
+            _spar["source_rate"] = src_params["strength"]
+        elif dep and "source_rates" in dep and dep["source_rates"]:
+            # Se não tem 'strength', usa o primeiro da lista source_rates
+            _spar["source_rate"] = dep["source_rates"][0]
 
         _es = parser_data.get("energy_source")
         if _es is not None:

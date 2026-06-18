@@ -135,9 +135,16 @@ class InputParserV217:
                 self._parse_simulation_parameters(lines)
             )
 
+            # FIX V236: parser NÃO calcula source_rate — isso é responsabilidade
+            # exclusiva do settings.py (única fonte de verdade). Parser apenas
+            # repassa flux e geometria; settings.py fará flux × area uma única vez.
+            # Mantido source_rate=None para backward compat, mas será sobrescrito
+            # pelo valor calculado em Phase C.
             flux     = sim_params.get("flux") or 0.0
             area_cm2 = x_cm * y_cm
-            sim_params["source_rate"] = max(float(flux) * area_cm2, 1e-6)
+            sim_params["wafer_x_cm"] = x_cm   # para settings.py usar
+            sim_params["wafer_y_cm"] = y_cm   # para settings.py usar
+            # sim_params["source_rate"] será definido em settings.py
 
             energy_spec = self._parse_energy_source(lines)
 
@@ -157,7 +164,9 @@ class InputParserV217:
 
             total_mass  = sum(lay.get("total_mass_g", 0.0) for lay in layers)
             cooling_h   = sim_params.get("cooling_time_h") or 0.0
-            source_rate = sim_params["source_rate"]
+            # FIX V236: source_rate será definido em settings.py (única fonte de verdade).
+            # Parser retorna None aqui; maestro preencherá após Phase C.
+            source_rate = sim_params.get("source_rate")  # pode ser None nesta fase
 
             return {
                 "success":   True,
