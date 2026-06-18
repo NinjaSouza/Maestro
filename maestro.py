@@ -943,9 +943,10 @@ class MaestroV237:
 
 
 # ── Aliases de retrocompatibilidade ──────────────────────────────────────────
-MaestroV230 = MaestroV235
-MaestroV226 = MaestroV235
-__all__ = ["MaestroV235", "MaestroV230", "MaestroV226"]
+MaestroV235 = MaestroV237
+MaestroV230 = MaestroV237
+MaestroV226 = MaestroV237
+__all__ = ["MaestroV237", "MaestroV235", "MaestroV230", "MaestroV226"]
 
 
 if __name__ == "__main__":
