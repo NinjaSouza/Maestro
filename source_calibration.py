@@ -3,7 +3,7 @@
 """
 source_calibration.py — Calibração da intensidade da fonte para reproduzir fluxo experimental.
 
-Módulo V238 — Implementa o contrato físico de calibração da fonte.
+Módulo V239 — IMPLEMENTAÇÃO CORRIGIDA PARA PRODUÇÃO
 
 CONTRATO FÍSICO:
   Quando FLUXO + espectro são fornecidos no input, o simulador executa uma
@@ -11,22 +11,34 @@ CONTRATO FÍSICO:
   experimental na face do alvo.
 
 ALGORITMO:
-  1. Constrói modelo OpenMC curto com geometria real
+  1. Constrói modelo OpenMC curto com geometria real COMPLETA
   2. Adiciona tally de fluxo na região receptora (primeira camada do alvo)
   3. Executa simulação curta com source_rate inicial de referência
-  4. Mede fluxo obtido ϕ_medido
-  5. Atualiza: sr_novo = sr_velho × (ϕ_alvo / ϕ_medido)
-  6. Repete até |ϕ_alvo - ϕ_medido| / ϕ_alvo < tolerância
+  4. Mede fluxo obtido ϕ_medido (em n·cm/src por partícula-fonte)
+  5. Converte: ϕ_físico = ϕ_medido × source_rate / volume_regiao
+  6. Atualiza: sr_novo = sr_velho × (ϕ_alvo / ϕ_físico)
+  7. Repete até |ϕ_alvo - ϕ_físico| / ϕ_alvo < tolerância
 
 RESULTADO:
   source_rate calibrado que reproduz o FLUXO experimental dentro da tolerância.
   Este valor é congelado e usado em toda a depleção subsequente.
+  
+FIXES V239:
+  - Exporta TODOS os XMLs (geometry, materials, settings, tallies) no mesmo diretório
+  - Converte corretamente tally por partícula-fonte para fluxo físico [n/cm²/s]
+  - Usa chaves corretas do contrato geometry.py (cellsdict, não cells_dict)
+  - Identifica primeira camada corretamente sem filtro desnecessário
+  - Posiciona fonte baseada nos metadados reais da geometria
+  - Usa área da face do alvo para chute inicial, não área expandida
+  - Log de atualização corrigido para mostrar valores reais
+  - Integração completa com openmc.Model para exportação consistente
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +80,7 @@ class CalibrationResult:
     converged: bool             # True se atingiu tolerância
     error_relative_final: float # Erro relativo final |ϕ_alvo - ϕ_medido| / ϕ_alvo
     tally_used: str             # Nome do tally usado para calibração
+    calibration_region_volume_cm3: float = 0.0  # Volume da região de medição
     iterations_history: List[Dict[str, Any]] = field(default_factory=list)
     error_message: str = ""
     
@@ -82,6 +95,7 @@ class CalibrationResult:
             "converged": self.converged,
             "error_relative_final": self.error_relative_final,
             "tally_used": self.tally_used,
+            "calibration_region_volume_cm3": self.calibration_region_volume_cm3,
             "iterations_history": self.iterations_history,
             "error_message": self.error_message,
             "timestamp": datetime.now().isoformat(),
@@ -100,9 +114,15 @@ class SourceCalibrator:
       calibrator = SourceCalibrator(flux_target, geometry_result, energy_source)
       result = calibrator.run()
       source_rate = result.source_rate_calibrated
+    
+    FIX V239:
+      - Recebe openmc.Geometry e openmc.Materials reais
+      - Exporta todos XMLs no mesmo diretório temporário
+      - Converte tally por partícula-fonte para fluxo físico corretamente
+      - Usa chaves do contrato atual (cellsdict, water_front, etc.)
     """
     
-    VERSION = "V238"
+    VERSION = "V239"
     
     def __init__(
         self,
@@ -112,6 +132,7 @@ class SourceCalibrator:
         wafer_x_cm: float,                     # Dimensão x do alvo [cm]
         wafer_y_cm: float,                     # Dimensão y do alvo [cm]
         water_lateral_cm: float,               # Água lateral [cm]
+        water_axial_cm: float = 5.0,           # Água axial [cm]
         config: Optional[SourceCalibrationConfig] = None,
         debug: bool = False,
     ) -> None:
@@ -121,24 +142,32 @@ class SourceCalibrator:
         self.wafer_x_cm = float(wafer_x_cm)
         self.wafer_y_cm = float(wafer_y_cm)
         self.water_lateral_cm = float(water_lateral_cm)
+        self.water_axial_cm = float(water_axial_cm)
         self.config = config or SourceCalibrationConfig()
         self.debug = debug
         
-        # Dimensões da fonte: alvo + água lateral
+        # Dimensões da fonte: deve cobrir alvo + água lateral
         self.source_x_cm = self.wafer_x_cm + 2.0 * self.water_lateral_cm
         self.source_y_cm = self.wafer_y_cm + 2.0 * self.water_lateral_cm
         self.source_area_cm2 = self.source_x_cm * self.source_y_cm
         
-        # Source rate inicial estimado: flux × area
-        self.source_rate_initial = self.flux_target * self.source_area_cm2
+        # Área da face do alvo para chute inicial (FÍSICAMENTE CORRETO)
+        self.target_face_area_cm2 = self.wafer_x_cm * self.wafer_y_cm
+        
+        # Source rate inicial estimado: flux × area_do_alvo (não área expandida)
+        self.source_rate_initial = self.flux_target * self.target_face_area_cm2
         
         # História de iterações
         self._history: List[Dict[str, Any]] = []
         
+        # Volume da região de calibração (preenchido após identificação da célula)
+        self._calibration_volume_cm3 = 0.0
+        
         logger.info(
-            "SourceCalibrator initialized: flux_target=%.4e n/cm²/s, "
-            "source_area=%.4f cm², source_rate_initial=%.4e n/s",
-            self.flux_target, self.source_area_cm2, self.source_rate_initial,
+            "SourceCalibrator V239 initialized: flux_target=%.4e n/cm²/s, "
+            "target_area=%.4f cm², source_area=%.4f cm², source_rate_initial=%.4e n/s",
+            self.flux_target, self.target_face_area_cm2, self.source_area_cm2, 
+            self.source_rate_initial,
         )
     
     def run(self) -> CalibrationResult:
@@ -169,9 +198,11 @@ class SourceCalibrator:
                 converged=True,
                 error_relative_final=0.0,
                 tally_used=self.config.CALIBRATION_TALLY_NAME,
+                calibration_region_volume_cm3=0.0,
             )
         
         source_rate_current = self.source_rate_initial
+        source_rate_previous = source_rate_current  # Para log correto
         
         for iteration in range(self.config.MAX_ITERATIONS):
             logger.info(
@@ -180,11 +211,11 @@ class SourceCalibrator:
             )
             
             # Executa simulação de calibração
-            flux_measured, flux_unc = self._run_calibration_iteration(
+            flux_measured_per_particle, flux_unc, vol_region = self._run_calibration_iteration(
                 source_rate_current, iteration
             )
             
-            if flux_measured <= 0.0 or np.isnan(flux_measured):
+            if flux_measured_per_particle <= 0.0 or np.isnan(flux_measured_per_particle):
                 logger.error("Fluxo medido zero ou NaN — abortando calibração")
                 return CalibrationResult(
                     success=False,
@@ -196,28 +227,46 @@ class SourceCalibrator:
                     converged=False,
                     error_relative_final=1.0,
                     tally_used=self.config.CALIBRATION_TALLY_NAME,
+                    calibration_region_volume_cm3=vol_region,
                     iterations_history=list(self._history),
                     error_message=f"Fluxo medido zero/NaN na iteração {iteration + 1}",
                 )
             
-            # Calcula erro relativo
-            error_rel = abs(self.flux_target - flux_measured) / self.flux_target
+            # FIX V239: Conversão correta de tally por partícula-fonte para fluxo físico
+            # O tally de fluxo em OpenMC fixed source retorna [n·cm/src] (por partícula-fonte)
+            # Para obter fluxo físico [n/cm²/s], precisamos:
+            #   ϕ_físico = (tally_flux × source_rate) / volume_regiao
+            # Justificativa:
+            #   - tally_flux tem unidades de track-length estimate: [n·cm/src]
+            #   - Multiplicando por source_rate [n/s]: [n·cm/s]
+            #   - Dividindo por volume [cm³]: [n/cm²/s] ✓
+            flux_physical = (flux_measured_per_particle * source_rate_current) / vol_region
+            
+            # Calcula erro relativo contra fluxo-alvo experimental
+            error_rel = abs(self.flux_target - flux_physical) / self.flux_target
             
             # Registra histórico
             iter_record = {
                 "iteration": iteration + 1,
                 "source_rate_n_s": source_rate_current,
-                "flux_measured_n_cm2_s": flux_measured,
+                "source_rate_previous_n_s": source_rate_previous,
+                "flux_tally_per_particle": flux_measured_per_particle,
+                "flux_physical_n_cm2_s": flux_physical,
                 "flux_uncertainty": flux_unc,
                 "flux_target_n_cm2_s": self.flux_target,
+                "calibration_volume_cm3": vol_region,
                 "error_relative": error_rel,
                 "converged": error_rel <= self.config.FLUX_TOLERANCE_REL,
             }
             self._history.append(iter_record)
             
             logger.info(
-                "  Fluxo medido: %.4e ± %.4e n/cm²/s (alvo: %.4e), erro: %.4f%%",
-                flux_measured, flux_unc, self.flux_target, error_rel * 100,
+                "  Tally flux: %.4e ± %.4e n·cm/src  |  Volume: %.4f cm³",
+                flux_measured_per_particle, flux_unc, vol_region,
+            )
+            logger.info(
+                "  Fluxo físico: %.4e n/cm²/s (alvo: %.4e), erro: %.4f%%",
+                flux_physical, self.flux_target, error_rel * 100,
             )
             
             # Verifica convergência
@@ -229,27 +278,30 @@ class SourceCalibrator:
                 return CalibrationResult(
                     success=True,
                     flux_target=self.flux_target,
-                    flux_achieved=flux_measured,
+                    flux_achieved=flux_physical,
                     source_rate_calibrated=source_rate_current,
                     source_rate_initial=self.source_rate_initial,
                     n_iterations=iteration + 1,
                     converged=True,
                     error_relative_final=error_rel,
                     tally_used=self.config.CALIBRATION_TALLY_NAME,
+                    calibration_region_volume_cm3=vol_region,
                     iterations_history=list(self._history),
                 )
             
             # Atualiza source_rate com under-relaxation
-            sr_new = source_rate_current * (self.flux_target / flux_measured)
+            source_rate_previous = source_rate_current
+            sr_new = source_rate_current * (self.flux_target / flux_physical)
             source_rate_current = (
                 self.config.UNDER_RELAXATION * sr_new +
                 (1.0 - self.config.UNDER_RELAXATION) * source_rate_current
             )
             
+            # FIX V239: Log corrigido mostrando valor anterior REAL
             logger.info(
-                "  source_rate atualizado: %.4e → %.4e (under-relax=%.2f)",
-                source_rate_current if iteration == 0 else source_rate_current / self.config.UNDER_RELAXATION,
-                source_rate_current, self.config.UNDER_RELAXATION,
+                "  source_rate atualizado: %.4e → %.4e (under-relax=%.2f, fator=%.4f)",
+                source_rate_previous, source_rate_current, 
+                self.config.UNDER_RELAXATION, sr_new / source_rate_previous if source_rate_previous > 0 else 0,
             )
         
         # Não convergiu dentro do máximo de iterações
@@ -260,13 +312,14 @@ class SourceCalibrator:
         return CalibrationResult(
             success=False,
             flux_target=self.flux_target,
-            flux_achieved=flux_measured,
+            flux_achieved=flux_physical,
             source_rate_calibrated=source_rate_current,
             source_rate_initial=self.source_rate_initial,
             n_iterations=self.config.MAX_ITERATIONS,
             converged=False,
             error_relative_final=error_rel,
             tally_used=self.config.CALIBRATION_TALLY_NAME,
+            calibration_region_volume_cm3=vol_region,
             iterations_history=list(self._history),
             error_message=f"Não convergiu em {self.config.MAX_ITERATIONS} iterações",
         )
@@ -275,23 +328,45 @@ class SourceCalibrator:
         self,
         source_rate: float,
         iteration: int,
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, float]:
         """
-        Executa uma iteração de calibração e retorna (fluxo_medido, incerteza).
+        Executa uma iteração de calibração e retorna (fluxo_por_particula, incerteza, volume_regiao).
+        
+        FIX V239:
+          - Exporta TODOS os XMLs (geometry, materials, settings, tallies)
+          - Usa openmc.Model completo para consistência
+          - Retorna volume da região de calibração para conversão física
         """
+        # Obtém geometria e materiais reais do resultado
+        openmc_geometry = self.geometry_result.get("openmc_geometry")
+        openmc_materials = self.geometry_result.get("openmc_materials")
+        
+        if openmc_geometry is None or openmc_materials is None:
+            logger.error("geometry_result não contém openmc_geometry ou openmc_materials")
+            return 0.0, 0.0, 0.0
+        
         # Configura modelo OpenMC mínimo para calibração
         settings = self._build_calibration_settings(source_rate, iteration)
         tallies = self._build_calibration_tallies()
         
-        # Exporta XMLs temporários
+        # Cria modelo completo
+        model = openmc.Model(
+            geometry=openmc_geometry,
+            materials=openmc_materials,
+            settings=settings,
+            tallies=tallies,
+        )
+        
+        # Exporta TODOS os XMLs no mesmo diretório temporário
         temp_dir = Path("temp_calibration")
-        temp_dir.mkdir(exist_ok=True)
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True, exist_ok=True)
         
-        settings.export_to_xml(temp_dir / "settings.xml")
-        tallies.export_to_xml(temp_dir / "tallies.xml")
+        # FIX V239: Exporta todos os componentes do modelo
+        model.export_to_xml(temp_dir)
         
-        # Materiais e geometria já estão configurados globalmente
-        # (geometry.py já exportou materials.xml e geometry.xml)
+        logger.debug("XMLs exportados para: %s", temp_dir.absolute())
         
         # Executa OpenMC
         try:
@@ -302,13 +377,13 @@ class SourceCalibrator:
             )
         except Exception as exc:
             logger.error("OpenMC falhou na calibração: %s", exc)
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
         
         # Lê StatePoint
         sp_files = list(temp_dir.glob("statepoint.*.h5"))
         if not sp_files:
             logger.error("Nenhum statepoint encontrado após calibração")
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
         
         sp_path = max(sp_files, key=lambda p: p.stat().st_mtime)
         
@@ -317,24 +392,72 @@ class SourceCalibrator:
                 tally = sp.get_tally(name=self.config.CALIBRATION_TALLY_NAME)
                 df = tally.get_pandas_dataframe()
                 
-                # Extrai fluxo médio e incerteza
-                mean_flux = float(df["mean"].sum())
+                # Extrai fluxo médio (por partícula-fonte) e incerteza
+                mean_flux_per_particle = float(df["mean"].sum())
                 std_flux = float(df["std. dev."].sum()) if "std. dev." in df.columns else 0.0
                 
-                # Normaliza por volume da célula se necessário
-                # O tally de fluxo em OpenMC já está em [n·cm/src]
-                # Para obter [n/cm²], dividimos pela área da face
-                # Mas como estamos fazendo razão, as unidades se cancelam
+                # Obtém volume da região de calibração
+                # O volume está nos filtros ou pode ser calculado da geometria
+                vol_region = self._get_calibration_volume(tally, sp)
                 
-                return mean_flux, std_flux
+                if vol_region <= 0.0:
+                    logger.warning("Volume da região de calibração não determinado — usando estimativa")
+                    # Estimativa baseada na primeira camada
+                    first_layer_thick = self._estimate_first_layer_thickness()
+                    vol_region = self.target_face_area_cm2 * first_layer_thick
+                
+                # FIX V239: Retorna fluxo POR PARTÍCULA-FONTE e volume separadamente
+                # A conversão para fluxo físico será feita no loop principal
+                return mean_flux_per_particle, std_flux, vol_region
+                
         except Exception as exc:
             logger.error("Erro ao ler statepoint da calibração: %s", exc)
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
         finally:
             # Limpa arquivos temporários
-            import shutil
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
+    
+    def _get_calibration_volume(self, tally: openmc.Tally, sp: openmc.StatePoint) -> float:
+        """
+        Obtém volume da região de calibração a partir do tally ou geometria.
+        """
+        # Tenta obter volume dos filtros do tally
+        for filt in tally.filters:
+            if isinstance(filt, openmc.CellFilter):
+                # Obtém células do filtro
+                cells = filt.cells
+                if len(cells) > 0:
+                    # Soma volumes das células
+                    total_vol = 0.0
+                    for cell_id in cells:
+                        # Tenta obter volume do resumo da geometria
+                        try:
+                            summary = sp.summary
+                            if summary and hasattr(summary, 'geometry'):
+                                cell = summary.geometry.get_cell_by_id(cell_id)
+                                if cell and hasattr(cell, 'volume') and cell.volume is not None:
+                                    total_vol += float(cell.volume)
+                        except Exception:
+                            pass
+                    
+                    if total_vol > 0.0:
+                        return total_vol
+        
+        return 0.0  # Volume não determinado
+    
+    def _estimate_first_layer_thickness(self) -> float:
+        """Estima espessura da primeira camada do alvo."""
+        layers = self.geometry_result.get("layers", [])
+        if layers and len(layers) > 0:
+            # Pega espessura da primeira camada
+            first_layer = layers[0]
+            thick_cm = first_layer.get("thickness_cm")
+            if thick_cm is None:
+                thick_mm = first_layer.get("thickness_mm", 0.0)
+                thick_cm = thick_mm / 10.0 if thick_mm > 0 else 0.1  # fallback 1mm
+            return float(thick_cm) if thick_cm > 0 else 0.1
+        return 0.1  # fallback 1mm
     
     def _build_calibration_settings(
         self,
@@ -352,14 +475,24 @@ class SourceCalibrator:
         if self.config.RANDOM_SEED is not None:
             settings.seed = self.config.RANDOM_SEED + iteration
         
-        # Fonte plana incidente
-        # Posição: 1 cm da face frontal do alvo (em água frontal)
-        z_source = -GeometryContract.DISTANCE_SOURCE_TO_FACE_CM
+        # FIX V239: Posiciona fonte baseado nos metadados da geometria real
+        # Usa WATER_AXIAL_CM da geometria construída, não valor hardcoded
+        metadata = self.geometry_result.get("metadata", {})
+        water_geom = metadata.get("water_geometry", {})
+        water_axial = water_geom.get("axial_cm", self.water_axial_cm)
         
+        # Fonte deve estar na face de entrada da água frontal
+        # z = -water_axial (face externa) + pequena folga
+        z_source = -water_axial + 1e-6
+        
+        # Espessura infinitesimal da fonte plana
+        dz_source = GeometryContract.SOURCE_PLANE_THICKNESS_CM
+        
+        # Dimensões da fonte derivadas da geometria real
+        # Deve cobrir: alvo + água lateral
         source_box = openmc.stats.Box(
             [-self.source_x_cm / 2, -self.source_y_cm / 2, z_source],
-            [ self.source_x_cm / 2,  self.source_y_cm / 2, 
-              z_source + GeometryContract.SOURCE_PLANE_THICKNESS_CM],
+            [ self.source_x_cm / 2,  self.source_y_cm / 2, z_source + dz_source],
         )
         
         settings.source = [openmc.IndependentSource(
@@ -369,6 +502,11 @@ class SourceCalibrator:
         )]
         
         settings.output = {"summary": True}
+        
+        logger.debug(
+            "Fonte configurada: z=%.4e cm, dimensões=%.3f×%.3f cm², source_rate=%.4e n/s",
+            z_source, self.source_x_cm, self.source_y_cm, source_rate,
+        )
         
         return settings
     
@@ -414,22 +552,47 @@ class SourceCalibrator:
         return openmc.stats.Maxwell(300.0 * kb_eV)
     
     def _build_calibration_tallies(self) -> openmc.Tallies:
-        """Constrói tallies para calibração."""
-        cells_dict = self.geometry_result.get("cells_dict", {})
+        """
+        Constrói tallies para calibração.
+        
+        FIX V239:
+          - Usa chave CORRETA 'cellsdict' do contrato geometry.py
+          - Remove filtro desnecessário de nomes de água
+          - cellsdict já contém apenas células do wafer
+        """
+        # FIX V239: Chave correta é 'cellsdict', não 'cells_dict'
+        cells_dict = self.geometry_result.get("cellsdict", {})
+        
+        # Tenta chave alternativa se necessário (backward compat)
+        if not cells_dict:
+            cells_dict = self.geometry_result.get("cells_dict", {})
         
         if not cells_dict:
-            raise ValueError("cells_dict ausente na geometria")
+            raise ValueError(
+                "cellsdict/cells_dict ausente na geometria. "
+                "Verifique se geometry.py foi executado corretamente."
+            )
         
-        # Identifica primeira camada do alvo (região receptora)
-        # A primeira camada não-água é o proxy operacional do fluxo experimental
+        # FIX V239: cellsdict já contém apenas células do wafer (sem água)
+        # Portanto, pegamos simplesmente a primeira célula do dicionário
+        # A ordem das camadas é preservada na construção da geometria
+        first_layer_name = None
         first_layer_cell = None
+        
+        # Itera nas células na ordem em que foram inseridas (preserva ordem das camadas)
         for name, cell in cells_dict.items():
-            if not name.startswith("water_"):
-                first_layer_cell = cell
-                break
+            first_layer_name = name
+            first_layer_cell = cell
+            break  # Pega a primeira
         
         if first_layer_cell is None:
-            raise ValueError("Nenhuma camada do alvo encontrada")
+            raise ValueError("Nenhuma camada do alvo encontrada em cellsdict")
+        
+        logger.info(
+            "Região de calibração: '%s' (id=%d)",
+            first_layer_name,
+            first_layer_cell.id if hasattr(first_layer_cell, 'id') else '?',
+        )
         
         # Tally de fluxo na primeira camada
         cell_filter = openmc.CellFilter([first_layer_cell])
@@ -438,13 +601,14 @@ class SourceCalibrator:
         tally.filters = [cell_filter]
         tally.scores = ["flux"]
         
+        # Estima volume da região para conversão posterior
+        self._calibration_volume_cm3 = self._estimate_first_layer_thickness() * self.target_face_area_cm2
+        
         tallies = openmc.Tallies([tally])
         
         logger.info(
-            "Tally de calibração criado: '%s' na célula '%s' (id=%d)",
-            self.config.CALIBRATION_TALLY_NAME,
-            first_layer_cell.name if hasattr(first_layer_cell, "name") else "?",
-            first_layer_cell.id,
+            "Tally de calibração criado: '%s' na célula '%s', volume estimado=%.4f cm³",
+            self.config.CALIBRATION_TALLY_NAME, first_layer_name, self._calibration_volume_cm3,
         )
         
         return tallies

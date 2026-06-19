@@ -442,6 +442,16 @@ class MaestroV237:
             self.audit.flux_target             = float(src.get("flux_n_cm2_s", 0))
             self.audit.source_rate_initial     = float(src.get("strength", 0))
             self.audit.calibration_required    = src.get("calibration_required", True)
+            
+            # FIX FASE 2: Persistir source_rate calibrado em settings_result e system_params
+            # Isso garante que o valor calibrado seja usado consistentemente em todo o pipeline
+            if "source_rate" in src and src["source_rate"] > 0:
+                # Atualizar settings_result com source_rate calibrado
+                context["settings_result"]["source_params"]["source_rate_calibrated"] = src["source_rate"]
+                # Também atualizar depletion_params se existir
+                dep = context["settings_result"].get("depletion_params", {})
+                if dep:
+                    dep["_source_rate_calibrated"] = src["source_rate"]
 
             # ── D: Simulation ────────────────────────────────────────────────
             logger.info("PHASE D — SIMULATION")
@@ -650,13 +660,22 @@ class MaestroV237:
             _spar["_source_rates"]            = dep.get("source_rates", [])
             _spar["_timesteps_s"]             = dep.get("timesteps_s", [])
         
-        # FIX V236: source_rate de Phase C é a única fonte de verdade
-        # settings.py já calculou flux × area corretamente uma única vez
-        if src_params and "strength" in src_params:
+        # FIX V239 FASE 2: Priorizar source_rate_calibrated se disponível
+        # A calibração em simulation.py pode ter ajustado o valor inicial
+        if src_params and "source_rate_calibrated" in src_params and src_params["source_rate_calibrated"] > 0:
+            _spar["source_rate"] = src_params["source_rate_calibrated"]
+            self.logger.info(
+                "Usando source_rate_calibrated=%.4e n/s (após calibração)",
+                src_params["source_rate_calibrated"],
+            )
+        elif src_params and "strength" in src_params:
             _spar["source_rate"] = src_params["strength"]
         elif dep and "source_rates" in dep and dep["source_rates"]:
             # Se não tem 'strength', usa o primeiro da lista source_rates
             _spar["source_rate"] = dep["source_rates"][0]
+        
+        # FIX FASE 2: Injetar geometry_result em system_params para acesso em simulation.py
+        _spar["_geometry_result"] = geo_result
 
         _es = parser_data.get("energy_source")
         if _es is not None:
