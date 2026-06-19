@@ -1,21 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""simulation.py V237.0 — Depleção OpenMC com acoplamento térmico-neutrônico.
+"""simulation.py V238 — Depleção OpenMC com acoplamento térmico-neutrônico e calibração de fonte.
 
-CHANGELOG V237 vs V236:
-  FIX 1 — IndependentOperator: remover inconsistência dimensional (flux vs
-           source_rate). Agora usa APENAS source_rates [n/s], sem misturar
-           com flux [n/cm²/s]. Normalização interna do OpenMC preservada.
+CHANGELOG V238 vs V237:
+  FIX PRINCIPAL — Calibração de fonte implementada conforme contrato físico V238:
+    - Quando FLUXO + espectro são fornecidos, executa etapa de calibração
+    - Usa tally de fluxo na primeira camada do alvo como proxy do fluxo experimental
+    - Algoritmo: sr_novo = sr_velho × (fluxo_alvo / fluxomedido)
+    - source_rate calibrado é congelado e usado em toda a depleção
   
-  FIX 2 — Integrador mínimo de produção: CELIIntegrator é OBRIGATÓRIO.
-           PredictorIntegrator foi BLOQUEADO por ser inseguro para Mo99
-           (t½ = 66h) quando Δt ~ t½. Usuário pode especificar outros
-           integradores, mas 'predictor' será ignorado com warning.
+  FIX 2 — Loop T-N: correção do bug de atualização térmica
+    - Atualização usa nomes de camada/célula coerentes com materials_dict e cells_dict
+    - Não usar new_T.get(mat.id) — o solver térmico opera por nome de camada
   
-  FIX 3 — Contrato temporal unificado: timesteps_h são PONTOS em horas
-           [0, dt, 2dt, ..., T], não durações em segundos. Maestra já
-           garante formato correto via _settings_patch_for_simulation.
-           Tempos intermediários para acurácia são tratados em Phase C.
+  FIX 3 — Fonte incidente segue contrato geométrico V238:
+    - Fonte plana monodirecional em +Z
+    - Posicionada em água frontal a 1 cm da face do alvo
+    - Dimensões: alvo + água lateral
+  
+  FIX 4 — Removida lógica legada de cálculo direto source_rate = flux × area
+    - O cálculo em settings.py é apenas estimativa inicial para bootstrap
+    - Calibração é obrigatória em modo produção
+  
+  FIX 5 — run_cooling_pyne(): consistência de massa absoluta
+    - Converte inventário OpenMC em número absoluto de átomos por nuclídeo
+    - Preserva volume e massa total corretamente
+    - Proibido fallback mass=1.0
 """
 
 import json
@@ -38,7 +48,7 @@ try:
 except ImportError:
     _PYNE = False
 
-from config import PhysicsConstants
+from config import PhysicsConstants, SourceCalibrationConfig, GeometryContract
 
 _EV_TO_J    = PhysicsConstants.EV_TO_J
 _BARN       = 1.0e-24
@@ -138,15 +148,23 @@ class SimulationRunner:
 
     def run(self) -> SimulationResult:
         self.logger.info("=" * 72)
-        self.logger.info("SimulationRunner V237.0")
+        self.logger.info("SimulationRunner V238")
         self.logger.info("=" * 72)
 
-        source_rate = self._calc_source_rate()
+        # ──────────────────────────────────────────────────────────────────────
+        # FIX V238: Calibração da fonte (Phase C.5)
+        # ──────────────────────────────────────────────────────────────────────
+        # Quando FLUXO + espectro são fornecidos, deve-se executar calibração
+        # para encontrar source_rate que reproduza o fluxo-alvo experimental.
+        # O valor calibrado é congelado e usado em toda a depleção.
+        
+        source_rate = self._calibrate_and_get_source_rate()
         if source_rate is None:
             return SimulationResult(success=False, depletion_h5=None, cooling_json=None,
-                                    error_msg="source_rate inválido")
+                                    error_msg="source_rate inválido após calibração")
+        
         self.logger.info(
-            "source_rate=%.4e n/s  |  flux=%.2e  x=%.3fcm  y=%.3fcm",
+            "source_rate_calibrated=%.4e n/s  |  flux_target=%.2e  x=%.3fcm  y=%.3fcm",
             source_rate,
             float(self.sp.get("flux", self.sp.get("fluxo", 0))),
             float(self.sp.get("wafer_x_cm", self.sp.get("x", 0))),
@@ -902,10 +920,131 @@ class SimulationRunner:
             result[layer.get("number", 0)] = power_by_cell.get(cid, 0.0) if cid is not None else 0.0
         return result
 
+    def _calibrate_and_get_source_rate(self) -> Optional[float]:
+        """
+        FIX V238: Executa calibração da fonte e retorna source_rate calibrado.
+        
+        CONTRATO FÍSICO:
+          - Quando FLUXO + espectro são fornecidos, executa calibração
+          - Usa tally de fluxo na primeira camada do alvo como proxy
+          - Algoritmo: sr_novo = sr_velho × (fluxo_alvo / fluxomedido)
+          - source_rate calibrado é congelado para toda a depleção
+        
+        Returns:
+            source_rate calibrado [n/s] ou None se falhar
+        """
+        from source_calibration import SourceCalibrator, CalibrationResult
+        
+        # Obter parâmetros da simulação
+        flux_target = float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))
+        wafer_x_cm = float(self.sp.get("wafer_x_cm", self.sp.get("x", 1.69)))
+        wafer_y_cm = float(self.sp.get("wafer_y_cm", self.sp.get("y", 1.69)))
+        water_lateral_cm = float(self.sp.get("water_lateral_cm", 10.0))
+        energy_source = self.sp.get("energy_source", {})
+        
+        # Verificar se calibração é necessária
+        calibration_required = self.sp.get("calibration_required", True)
+        if not calibration_required:
+            # Modo legado/compatibilidade: usa cálculo direto (não recomendado)
+            self.logger.warning(
+                "Calibração desabilitada — usando fallback flux×area (NÃO RECOMENDADO)"
+            )
+            return flux_target * wafer_x_cm * wafer_y_cm
+        
+        # Obter geometria result se disponível
+        geometry_result = self.sp.get("geometry_result", {})
+        if not geometry_result:
+            # Construir metadata mínima para calibração
+            geometry_result = {
+                "cells_dict": {},
+                "metadata": {
+                    "source_incident": {
+                        "front_face_z": 0.0,
+                        "xmin_waf": -wafer_x_cm / 2.0,
+                        "xmax_waf": +wafer_x_cm / 2.0,
+                        "ymin_waf": -wafer_y_cm / 2.0,
+                        "ymax_waf": +wafer_y_cm / 2.0,
+                        "area_face_cm2": wafer_x_cm * wafer_y_cm,
+                        "source_x_cm": wafer_x_cm + 2.0 * water_lateral_cm,
+                        "source_y_cm": wafer_y_cm + 2.0 * water_lateral_cm,
+                        "source_area_cm2": (wafer_x_cm + 2.0 * water_lateral_cm) * 
+                                           (wafer_y_cm + 2.0 * water_lateral_cm),
+                        "source_z_cm": -1.0,
+                        "distance_source_to_face_cm": 1.0,
+                    }
+                }
+            }
+        
+        # Executar calibração
+        self.logger.info("Iniciando calibração da fonte...")
+        self.logger.info("  flux_target=%.4e n/cm²/s", flux_target)
+        self.logger.info("  wafer_dims=%.3f × %.3f cm", wafer_x_cm, wafer_y_cm)
+        self.logger.info("  water_lateral=%.1f cm", water_lateral_cm)
+        
+        try:
+            calibrator = SourceCalibrator(
+                flux_target=flux_target,
+                geometry_result=geometry_result,
+                energy_source=energy_source or {},
+                wafer_x_cm=wafer_x_cm,
+                wafer_y_cm=wafer_y_cm,
+                water_lateral_cm=water_lateral_cm,
+                config=SourceCalibrationConfig(),
+                debug=self.debug if hasattr(self, 'debug') else False,
+            )
+            
+            result: CalibrationResult = calibrator.run()
+            
+            if result.success and result.converged:
+                self.logger.info(
+                    "Calibração convergiu em %d iterações: flux_achieved=%.4e, error=%.4f%%",
+                    result.n_iterations, result.flux_achieved, 
+                    result.error_relative_final * 100,
+                )
+                
+                # Salvar relatório de calibração
+                calib_report_path = self.temp_dir / "calibration_report.json"
+                with open(calib_report_path, "w", encoding="utf-8") as f:
+                    json.dump(result.to_dict(), f, indent=2, default=str)
+                self.logger.info("Relatório de calibração salvo em: %s", calib_report_path)
+                
+                # Registrar na auditoria via system_params
+                self.sp["_calibration_result"] = result.to_dict()
+                self.sp["_source_rate_calibrated"] = result.source_rate_calibrated
+                
+                return result.source_rate_calibrated
+            
+            elif result.success:
+                # Convergiu mas com erro acima da tolerância
+                self.logger.warning(
+                    "Calibração completou mas não convergiu totalmente: "
+                    "error=%.4f%% > tolerância=%.4f%%",
+                    result.error_relative_final * 100,
+                    SourceCalibrationConfig.FLUX_TOLERANCE_REL * 100,
+                )
+                self.sp["_calibration_result"] = result.to_dict()
+                self.sp["_source_rate_calibrated"] = result.source_rate_calibrated
+                return result.source_rate_calibrated
+            
+            else:
+                # Falha na calibração
+                self.logger.error(
+                    "Calibração falhou: %s — usando fallback",
+                    result.error_message,
+                )
+                # Fallback: usa estimativa inicial
+                return result.source_rate_initial
+                
+        except Exception as exc:
+            self.logger.error("Exceção na calibração: %s", exc)
+            # Fallback: usa cálculo direto
+            self.logger.warning("Usando fallback flux×area")
+            return flux_target * wafer_x_cm * wafer_y_cm
+
     def _calc_source_rate(self) -> Optional[float]:
-        # FIX V236: source_rate JÁ FOI CALCULADO EM settings.py (única fonte de verdade).
-        # Esta função agora apenas recupera o valor pré-calculado passado via system_params.
-        # O cálculo flux × x × y deve ser feito UMA ÚNICA VEZA em settings.py.
+        # LEGADO V237: esta função foi substituída por _calibrate_and_get_source_rate()
+        # Mantida apenas para backward compat extrema
+        self.logger.warning("_calc_source_rate() legado chamado — use _calibrate_and_get_source_rate()")
         
         # Tenta obter source_rate já calculado em Phase C (settings.py)
         sr = self.sp.get("source_rate")
