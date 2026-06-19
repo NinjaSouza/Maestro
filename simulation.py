@@ -291,14 +291,8 @@ class SimulationRunner:
             if rows.empty:
                 return 0.0
             v = float(rows["mean"].sum())
-            v = v if v >= 0.0 else 0.0
-            self.logger.debug(
-                "_read_tally('%s', cell=%d): score_sum=%.4e  n_rows=%d",
-                name, cell_id, v, len(rows),
-            )
-            return v
+            return max(v, 0.0)
         except Exception as exc:
-            self.logger.debug("_read_tally('%s', cell=%d): %s", name, cell_id, exc)
             return 0.0
 
     # ── Settings e modelo ─────────────────────────────────────────────────────
@@ -314,19 +308,13 @@ class SimulationRunner:
         x    = float(self.sp.get("wafer_x_cm", self.sp.get("x", 1.69)))
         y    = float(self.sp.get("wafer_y_cm", self.sp.get("y", 1.69)))
 
-        # FIX geometria com água: a fonte colimada entra pela face externa da
-        # região de água frontal (z = -WATER_AXIAL_CM) e se propaga em +Z.
-        # Antes ficava em z ~ 1e-6 (dentro do wafer), ignorando a moderação.
-        # Agora a água frontal (5 cm) modera antes de atingir o alvo — fisicamente correto.
         try:
             from geometry import GeometryBuilder as _GB
             water_axial = _GB.WATER_AXIAL_CM
         except ImportError:
-            water_axial = 5.0   # fallback conservador
+            water_axial = 5.0
 
-        # Plano de entrada: face externa da água frontal + folga de 1 µm
         z_src = -water_axial + 1e-6
-        # Espessura infinitesimal da fonte (plano de emissão)
         dz_src = 1e-6
 
         source_box = openmc.stats.Box(
