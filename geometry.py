@@ -307,6 +307,21 @@ class GeometryBuilder:
                     "water_axial_cm": self.WATER_AXIAL_CM,
                     "water_lateral_cm": self.WATER_LATERAL_CM,
                     "shared_materials_allowed": True,
+                    # FIX FASE 2: Enriquecer metadata para calibração
+                    "water_geometry": {
+                        "axial_cm": self.WATER_AXIAL_CM,
+                        "lateral_cm": self.WATER_LATERAL_CM,
+                        "total_z_cm": wafer_geom["total_thickness_cm"] + 2.0 * self.WATER_AXIAL_CM,
+                        "total_x_cm": wafer_geom["x_cm"] + 2.0 * self.WATER_LATERAL_CM,
+                        "total_y_cm": wafer_geom["y_cm"] + 2.0 * self.WATER_LATERAL_CM,
+                    },
+                    "source_incident": {
+                        "front_face_z": 0.0,
+                        "source_plane_z": -self.WATER_AXIAL_CM,
+                        "area_face_cm2": wafer_geom["area_cm2"],
+                        "wafer_x_cm": wafer_geom["x_cm"],
+                        "wafer_y_cm": wafer_geom["y_cm"],
+                    },
                 },
                 "updater": updater,
             }

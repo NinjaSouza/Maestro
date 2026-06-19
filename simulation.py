@@ -922,13 +922,18 @@ class SimulationRunner:
 
     def _calibrate_and_get_source_rate(self) -> Optional[float]:
         """
-        FIX V238: Executa calibração da fonte e retorna source_rate calibrado.
+        FIX V239 FASE 2: Executa calibração da fonte e retorna source_rate calibrado.
         
         CONTRATO FÍSICO:
           - Quando FLUXO + espectro são fornecidos, executa calibração
           - Usa tally de fluxo na primeira camada do alvo como proxy
           - Algoritmo: sr_novo = sr_velho × (fluxo_alvo / fluxomedido)
           - source_rate calibrado é congelado para toda a depleção
+        
+        FIX FASE 2:
+          - Passa openmc_geometry e openmc_materials explicitamente
+          - Enriquece geometry_result com metadados completos se necessário
+          - Valida resultado pós-calibração
         
         Returns:
             source_rate calibrado [n/s] ou None se falhar
@@ -951,13 +956,23 @@ class SimulationRunner:
             )
             return flux_target * wafer_x_cm * wafer_y_cm
         
-        # Obter geometria result se disponível
+        # FIX FASE 2: Obter geometria e materiais OpenMC explícitos
         geometry_result = self.sp.get("geometry_result", {})
-        if not geometry_result:
-            # Construir metadata mínima para calibração
+        openmc_geometry = geometry_result.get("openmc_geometry")
+        openmc_materials = geometry_result.get("openmc_materials")
+        
+        # Se geometry_result não estiver disponível, construir metadata mínima
+        if not geometry_result or openmc_geometry is None or openmc_materials is None:
+            self.logger.warning(
+                "geometry_result incompleto — construindo metadata mínima para calibração"
+            )
             geometry_result = {
-                "cells_dict": {},
+                "cellsdict": {},
                 "metadata": {
+                    "water_geometry": {
+                        "axial_cm": 5.0,
+                        "lateral_cm": water_lateral_cm,
+                    },
                     "source_incident": {
                         "front_face_z": 0.0,
                         "xmin_waf": -wafer_x_cm / 2.0,
@@ -969,11 +984,20 @@ class SimulationRunner:
                         "source_y_cm": wafer_y_cm + 2.0 * water_lateral_cm,
                         "source_area_cm2": (wafer_x_cm + 2.0 * water_lateral_cm) * 
                                            (wafer_y_cm + 2.0 * water_lateral_cm),
-                        "source_z_cm": -1.0,
-                        "distance_source_to_face_cm": 1.0,
+                        "source_z_cm": -5.0,
+                        "distance_source_to_face_cm": 5.0,
                     }
                 }
             }
+            # Se temos self.geometry e self.materials, usá-los
+            if hasattr(self, 'geometry') and self.geometry is not None:
+                openmc_geometry = self.geometry
+            if hasattr(self, 'materials') and self.materials is not None:
+                openmc_materials = openmc.Materials(self.materials)
+        
+        # FIX FASE 2: Enriquecer geometry_result com openmc_geometry e openmc_materials
+        geometry_result["openmc_geometry"] = openmc_geometry
+        geometry_result["openmc_materials"] = openmc_materials
         
         # Executar calibração
         self.logger.info("Iniciando calibração da fonte...")
@@ -994,6 +1018,16 @@ class SimulationRunner:
             )
             
             result: CalibrationResult = calibrator.run()
+            
+            # FIX FASE 2: Validação pós-calibração
+            if result.converged and result.flux_target > 0:
+                flux_ratio = result.flux_achieved / result.flux_target
+                if not (0.95 <= flux_ratio <= 1.05):
+                    self.logger.warning(
+                        "Calibração convergiu mas com erro físico: "
+                        "flux_ratio=%.4f fora de [0.95, 1.05]",
+                        flux_ratio,
+                    )
             
             if result.success and result.converged:
                 self.logger.info(
