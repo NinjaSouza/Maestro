@@ -121,7 +121,7 @@ class PhaseAudit:
 
 @dataclass
 class PipelineAudit:
-    version:                 str  = "V237"
+    version:                 str  = "V238"
     started_at:              str  = field(default_factory=lambda: datetime.now().isoformat())
     ended_at:                Optional[str] = None
     total_duration_seconds:  float = 0.0
@@ -144,6 +144,15 @@ class PipelineAudit:
     depletion_normalization: str = ""
     chain_file:              str = ""
     dt_depletion_h:          float = 0.0
+    # V238: campos de rastreabilidade de calibração da fonte
+    flux_target:             float = 0.0
+    flux_achieved:           float = 0.0
+    source_rate_initial:     float = 0.0
+    source_rate_calibrated:  float = 0.0
+    calibration_required:    bool  = True
+    calibration_iterations:  int   = 0
+    calibration_converged:   bool  = False
+    tally_used:              str   = ""
 
     def to_json(self, filepath: str) -> None:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -428,6 +437,11 @@ class MaestroV237:
             self.audit.dt_depletion_h          = float(
                 tp.get("dt_depletion_h", SimulationDefaults.DT_H_DEPLETION)
             )
+            
+            # V238: Registrar parâmetros de calibração da fonte
+            self.audit.flux_target             = float(src.get("flux_n_cm2_s", 0))
+            self.audit.source_rate_initial     = float(src.get("strength", 0))
+            self.audit.calibration_required    = src.get("calibration_required", True)
 
             # ── D: Simulation ────────────────────────────────────────────────
             logger.info("PHASE D — SIMULATION")
@@ -440,6 +454,22 @@ class MaestroV237:
                 return self.finalize_pipeline(t0, success=False,
                                               error=r.get("error", "Phase D falhou"))
             context["simulation_result"] = r
+            
+            # V238: Extrair resultados da calibração da fonte
+            sim_result = r
+            calib_result = sim_result.get("_calibration_result", {})
+            if calib_result:
+                self.audit.flux_achieved           = float(calib_result.get("flux_achieved_n_cm2_s", 0))
+                self.audit.source_rate_calibrated  = float(calib_result.get("source_rate_calibrated_n_s", 0))
+                self.audit.calibration_iterations  = int(calib_result.get("n_iterations", 0))
+                self.audit.calibration_converged   = bool(calib_result.get("converged", False))
+                logger.info(
+                    "  Calibração: flux_target=%.4e → flux_achieved=%.4e (%d iterações, converged=%s)",
+                    self.audit.flux_target, self.audit.flux_achieved,
+                    self.audit.calibration_iterations,
+                    "SIM" if self.audit.calibration_converged else "NÃO",
+                )
+            
             pw = r.get("power_distribution", {})
             logger.info(
                 "  OK h5=%s  camadas_com_potência=%d  timesteps_integrados=%d",

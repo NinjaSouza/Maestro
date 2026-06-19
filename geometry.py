@@ -707,5 +707,88 @@ class GeometryBuilder:
 # API pública
 # ─────────────────────────────────────────────────────────────────────────────
 
+def build_incident_source_geometry_metadata(
+    wafer_x_cm: float,
+    wafer_y_cm: float,
+    water_lateral_cm: float,
+    total_thickness_cm: float,
+) -> dict:
+    """
+    Constrói metadados da geometria da fonte incidente conforme contrato físico V238.
+    
+    CONTRATO FÍSICO:
+      - Fonte plana unidirecional em +Z
+      - Posicionada em água frontal a 1 cm da face do alvo
+      - Dimensões: alvo + água lateral (cobre toda região frontal)
+    
+    Args:
+        wafer_x_cm: Dimensão x do alvo [cm]
+        wafer_y_cm: Dimensão y do alvo [cm]
+        water_lateral_cm: Espessura de água lateral [cm]
+        total_thickness_cm: Soma das espessuras das camadas do alvo [cm]
+    
+    Returns:
+        dict com metadados para calibração da fonte:
+          - front_face_z: posição z da face frontal do alvo (= 0.0)
+          - xmin_waf, xmax_waf, ymin_waf, ymax_waf: limites da face
+          - area_face_cm2: área da face frontal do alvo
+          - source_x_cm, source_y_cm: dimensões da fonte
+          - source_area_cm2: área da fonte
+          - source_z_cm: posição z da fonte (= -1.0 cm)
+          - distance_source_to_face_cm: distância fonte-face (= 1.0 cm)
+    """
+    # Face frontal do alvo está em z = 0.0 (início das camadas)
+    front_face_z = 0.0
+    
+    # Limites da face do alvo (centrado em origem)
+    xmin_waf = -wafer_x_cm / 2.0
+    xmax_waf = +wafer_x_cm / 2.0
+    ymin_waf = -wafer_y_cm / 2.0
+    ymax_waf = +wafer_y_cm / 2.0
+    area_face_cm2 = wafer_x_cm * wafer_y_cm
+    
+    # Dimensões da fonte: alvo + água lateral (cobre toda região frontal)
+    source_x_cm = wafer_x_cm + 2.0 * water_lateral_cm
+    source_y_cm = wafer_y_cm + 2.0 * water_lateral_cm
+    source_area_cm2 = source_x_cm * source_y_cm
+    
+    # Posição da fonte: 1 cm à frente da face (em água frontal)
+    source_z_cm = front_face_z - GeometryContract.DISTANCE_SOURCE_TO_FACE_CM
+    
+    return {
+        "front_face_z": front_face_z,
+        "xmin_waf": xmin_waf,
+        "xmax_waf": xmax_waf,
+        "ymin_waf": ymin_waf,
+        "ymax_waf": ymax_waf,
+        "area_face_cm2": area_face_cm2,
+        "source_x_cm": source_x_cm,
+        "source_y_cm": source_y_cm,
+        "source_area_cm2": source_area_cm2,
+        "source_z_cm": source_z_cm,
+        "distance_source_to_face_cm": GeometryContract.DISTANCE_SOURCE_TO_FACE_CM,
+        "source_direction": GeometryContract.SOURCE_DIRECTION,
+    }
+
+
 def build_geometry(parser_result: dict, debug: bool = False) -> dict:
-    return GeometryBuilder(debug=debug).build(parser_result)
+    result = GeometryBuilder(debug=debug).build(parser_result)
+    
+    # Enriquecer resultado com metadados da fonte incidente
+    if result.get("success") and "wafer_geometry" in result:
+        wg = result["wafer_geometry"]
+        water_geom = result.get("water_geometry", {})
+        
+        source_metadata = build_incident_source_geometry_metadata(
+            wafer_x_cm=float(wg.get("x_cm", 1.69)),
+            wafer_y_cm=float(wg.get("y_cm", 1.69)),
+            water_lateral_cm=float(water_geom.get("lateral_cm", 10.0)),
+            total_thickness_cm=float(wg.get("total_thickness_cm", 0.0)),
+        )
+        
+        # Adicionar metadados ao resultado
+        if "metadata" not in result:
+            result["metadata"] = {}
+        result["metadata"]["source_incident"] = source_metadata
+    
+    return result

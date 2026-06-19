@@ -12,6 +12,11 @@ CHANGELOG V2:
   - CoolingConfig.n_snapshots: evita divisão por zero quando COOLING_TIME_H=0.
   - NuclearDataPaths: candidatos de chain agora incluem chain_endfb80_act.xml
     (yields cumulativos, melhor para ativação de alvos).
+
+CHANGELOG V238 (Refatoração de Calibração de Fonte):
+  - SourceCalibrationConfig: nova classe com parâmetros de calibração da fonte.
+  - GeometryContract: regras geométricas explícitas (distância fonte-face = 1 cm).
+  - Defaults centralizados para calibração: tolerância, iterações máximas, etc.
 """
 
 from __future__ import annotations
@@ -26,6 +31,8 @@ __all__ = [
     "CoolingConfig",
     "NuclearDataPaths",
     "GeometryLimits",
+    "GeometryContract",
+    "SourceCalibrationConfig",
     "ThermalSolverConfig",
     "ChainDataProxy",
     "SimulationDefaults",
@@ -64,6 +71,99 @@ class ValidationLimits:
     TEMP_ACA_MAX_K:         float = 1673.0
     RHO_MAX_GCM3:           float = 25.0    # acima de Os = 22.6 g/cm³
     SOURCE_RATE_MIN:        float = 1e3     # n/s mínimo aceitável
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2.5. CONTRATO GEOMÉTRICO DA FONTE INCIDENTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+class GeometryContract:
+    """
+    Regras geométricas obrigatórias para o contrato físico da fonte incidente.
+    
+    Este contrato define a geometria padrão da simulação:
+    - Alvo: paralelepípedo retangular com seção x×y e profundidade = soma das camadas
+    - Fonte: plana, unidirecional, incidente normalmente na face frontal (+z)
+    - Posição da fonte: em água frontal, a DISTANCE_SOURCE_TO_FACE_CM da face do alvo
+    - Dimensões da fonte: coincidem com a célula frontal (alvo + água lateral)
+    
+    Estas regras NÃO são números mágicos — são derivadas do contrato físico e
+    devem ser respeitadas por geometry.py e simulation.py.
+    """
+    # Distância fixa da fonte à face frontal do alvo [cm]
+    # Regra explícita do contrato: fonte está a 1 cm da face de entrada
+    DISTANCE_SOURCE_TO_FACE_CM: float = 1.0
+    
+    # Espessura infinitesimal da fonte plana [cm]
+    SOURCE_PLANE_THICKNESS_CM: float = 1e-6
+    
+    # A fonte deve cobrir automaticamente: dimensão do alvo + água lateral
+    # Isso é implementado em geometry.py ao construir a região de água frontal
+    SOURCE_COVERS_FRONT_FACE: bool = True
+    
+    # Orientação: monodirecional em +Z (incidente normal à face x-y)
+    SOURCE_DIRECTION: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2.6. CONFIGURAÇÃO DE CALIBRAÇÃO DA FONTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class SourceCalibrationConfig:
+    """
+    Parâmetros de calibração da intensidade da fonte.
+    
+    Quando FLUXO + espectro são fornecidos, o simulador deve executar uma
+    etapa de calibração para encontrar source_rate que reproduza o fluxo-alvo
+    experimental na face do alvo.
+    
+    A calibração usa um modelo OpenMC curto com tally de fluxo na região
+    receptora imediatamente após a face de entrada do alvo.
+    
+    Algoritmo: sr_novo = sr_velho × (fluxo_alvo / fluxomedido)
+    """
+    # Habilitar calibração automática da fonte
+    ENABLE_CALIBRATION: bool = True
+    
+    # Tolerância relativa para convergência do fluxo calibrado
+    # Ex: 0.02 = 2% de tolerância
+    FLUX_TOLERANCE_REL: float = 0.02
+    
+    # Número máximo de iterações de calibração
+    MAX_ITERATIONS: int = 10
+    
+    # Contagem de partículas por simulação de calibração
+    # Valor menor que produção para velocidade, mas suficiente para estatística
+    PARTICLES_PER_ITERATION: int = 50_000
+    
+    # Batches por iteração de calibração
+    BATCHES_PER_ITERATION: int = 5
+    
+    # Fator de under-relaxation para estabilidade numérica
+    # Evita oscilações quando ruído estatístico é alto
+    UNDER_RELAXATION: float = 0.8
+    
+    # Fluxo mínimo aceitável para evitar divisão por zero
+    MIN_FLUX_MEASURED: float = 1e-6  # n/cm²/s
+    
+    # Se True, usa tally de corrente superficial na face; se False, usa
+    # tally de fluxo volumétrico na primeira camada como proxy
+    USE_SURFACE_CURRENT: bool = False
+    
+    # Nome do tally de calibração (para identificação no StatePoint)
+    CALIBRATION_TALLY_NAME: str = "flux_calibration"
+    
+    # Semente aleatória para reprodutibilidade da calibração
+    RANDOM_SEED: Optional[int] = None
+    
+    def __post_init__(self) -> None:
+        if not 0 < self.FLUX_TOLERANCE_REL < 1:
+            raise ValueError(f"FLUX_TOLERANCE_REL deve estar em (0, 1), obteve {self.FLUX_TOLERANCE_REL}")
+        if self.MAX_ITERATIONS < 1:
+            raise ValueError(f"MAX_ITERATIONS deve ser >= 1, obteve {self.MAX_ITERATIONS}")
+        if not 0 < self.UNDER_RELAXATION <= 1:
+            raise ValueError(f"UNDER_RELAXATION deve estar em (0, 1], obteve {self.UNDER_RELAXATION}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
