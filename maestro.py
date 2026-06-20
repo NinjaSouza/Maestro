@@ -700,6 +700,7 @@ class MaestroV237:
                 "settings_result": settings_patched,
                 "parser_result":   parser_data,
                 "output_dir":      str(self.output_dir),
+                "system_params":   _spar,  # FIX V241: incluir system_params com _geometry_result
             }
         elif "geometry" in sig_params and "settings_result" in sig_params:
             kw = {
@@ -710,6 +711,7 @@ class MaestroV237:
                 "system_params":   _spar,
                 "output_dir":      str(self.output_dir),
                 "tn_loop_config":  TNLoopConfig,
+                "geometry_result": geo_result,  # FIX V240: passar geometry_result completo para SimulationRunner
             }
         elif "geometry" in sig_params and "settings" in sig_params:
             kw = {

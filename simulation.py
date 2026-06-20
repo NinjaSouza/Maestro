@@ -119,6 +119,7 @@ class SimulationRunner:
         temp_dir:       Path  = Path("temp"),
         output_dir:     Path  = Path("pipeline_results"),
         log_path:       Path  = Path("logs/simulation.log"),
+        _geometry_result: dict = None,  # FIX V240: para acesso ao cells_dict na calibração
     ):
         self.geometry  = geometry
         self.materials = materials
@@ -140,6 +141,9 @@ class SimulationRunner:
         self.output_dir    = Path(output_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # FIX V240: armazenar geometry_result para a calibração
+        if _geometry_result:
+            self.sp["_geometry_result"] = _geometry_result
         self._tn_history:  list                 = []
         self._ts_results:  List[TimestepResult] = []
         self.logger = self._init_logger(log_path)
@@ -1222,6 +1226,8 @@ def run_simulation(
         cooling_hours=cooling_h, cooling_steps=max(1, int(cooling_h)) if cooling_h > 0 else 6,
         output_dir=output_dir, temp_dir=Path(output_dir) / "temp",
         log_path=Path("logs") / "simulation.log",
+        # FIX V240: passar geometry_result para SimulationRunner acessar cells_dict
+        _geometry_result=system_params.get("_geometry_result", {}),
     )
 
     result = runner.run()
