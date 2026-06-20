@@ -1,23 +1,4 @@
-```markdown
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-
-# Dependencies
-.venv/
-venv/
-node_modules/
-
+```
 # Python
 __pycache__/
 *.pyc
@@ -25,6 +6,8 @@ __pycache__/
 *.pyd
 .Python
 env/
+venv/
+.venv/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
@@ -35,31 +18,42 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
-.git/modules/
-.DS_Store
-*.swp
-*~
+*.pot
+*.pyc
+*.pyo
+*.pyd
+*.so
+.TemporaryItems
+.deps
+.Python
 .pytest_cache/
 .mypy_cache/
-.hypothesis/
 
-# Build and distribution artifacts
-dist/
+# Build artifacts
 build/
-*.egg-info/
-.eggs/
-.installed.cfg
-lib/
-lib64/
-parts/
-sdist/
-develop-eggs/
-downloads/
-eggs/
-.eggs/
-parts/
-var/
-wheels/
-share/python-wheels/
+dist/
 *.egg
+*.egg-info/
+.dSYM/
+.svn/
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage*
+htmlcov/
+.cov/
+coverage/
 ```

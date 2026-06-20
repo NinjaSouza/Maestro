@@ -967,9 +967,11 @@ class SimulationRunner:
                 "geometry_result incompleto — construindo metadata mínima para calibração. "
                 "Isso indica que maestro.py não passou geometry_result corretamente."
             )
+            # FIX V240: Preservar cells_dict existente se disponível, não sobrescrever com {}
+            existing_cells_dict = geometry_result.get("cells_dict", {}) if geometry_result else {}
             # FIX V240: Incluir cells_dict (chave correta) no metadata fallback
             geometry_result = {
-                "cells_dict": {},  # FIX V240: chave correta, não 'cellsdict'
+                "cells_dict": existing_cells_dict,  # FIX V240: preserva cells_dict existente
                 "metadata": {
                     "water_geometry": {
                         "axial_cm": 5.0,
