@@ -55,7 +55,9 @@ WATER_FLOW_RATE 0.003            # Vazão (m³/s)
 # CONFIGURAÇÕES TÉCNICAS
 # ============================================================================
 USE_GPU true                     # Usar GPU se disponível
-CHAIN_FILE chain_endfb80_pwr.xml # Biblioteca de depleção
+# FIX V240: Usar chain_endfb80_act.xml (yields cumulativos) para ativação estrutural
+# O chain_endfb80_pwr.xml é otimizado para PWR e pode não conter produtos de ativação como Mo99
+CHAIN_FILE chain_endfb80_act.xml # Biblioteca de depleção (prioritário para ativação)
 THERMAL_COUPLING true           # Acoplamento térmico (true/false)
 
 # ============================================================================

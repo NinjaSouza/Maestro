@@ -560,17 +560,15 @@ class SourceCalibrator:
           - Remove filtro desnecessário de nomes de água
           - cellsdict já contém apenas células do wafer
         """
-        # FIX V239: Chave correta é 'cellsdict', não 'cells_dict'
-        cells_dict = self.geometry_result.get("cellsdict", {})
-        
-        # Tenta chave alternativa se necessário (backward compat)
-        if not cells_dict:
-            cells_dict = self.geometry_result.get("cells_dict", {})
+        # FIX V240: Chave correta é 'cells_dict' conforme contrato geometry.py (linha 280)
+        # geometry.py retorna: "cells_dict": wafer_cells (apenas células do wafer)
+        cells_dict = self.geometry_result.get("cells_dict", {})
         
         if not cells_dict:
             raise ValueError(
-                "cellsdict/cells_dict ausente na geometria. "
-                "Verifique se geometry.py foi executado corretamente."
+                "cells_dict ausente na geometria. "
+                "Verifique se geometry.py foi executado corretamente e retornou 'cells_dict'. "
+                f"Chaves disponíveis em geometry_result: {list(self.geometry_result.keys())}"
             )
         
         # FIX V239: cellsdict já contém apenas células do wafer (sem água)
