@@ -964,10 +964,12 @@ class SimulationRunner:
         # Se geometry_result não estiver disponível, construir metadata mínima
         if not geometry_result or openmc_geometry is None or openmc_materials is None:
             self.logger.warning(
-                "geometry_result incompleto — construindo metadata mínima para calibração"
+                "geometry_result incompleto — construindo metadata mínima para calibração. "
+                "Isso indica que maestro.py não passou geometry_result corretamente."
             )
+            # FIX V240: Incluir cells_dict (chave correta) no metadata fallback
             geometry_result = {
-                "cellsdict": {},
+                "cells_dict": {},  # FIX V240: chave correta, não 'cellsdict'
                 "metadata": {
                     "water_geometry": {
                         "axial_cm": 5.0,
@@ -1071,9 +1073,11 @@ class SimulationRunner:
                 
         except Exception as exc:
             self.logger.error("Exceção na calibração: %s", exc)
-            # Fallback: usa cálculo direto
-            self.logger.warning("Usando fallback flux×area")
-            return flux_target * wafer_x_cm * wafer_y_cm
+            # FIX V240: NÃO usar fallback — falhar explicitamente para evitar resultados fisicamente inconsistentes
+            raise RuntimeError(
+                f"Calibração da fonte falhou: {exc}. "
+                "Não é possível prosseguir com source_rate não calibrado."
+            ) from exc
 
     def _calc_source_rate(self) -> Optional[float]:
         # LEGADO V237: esta função foi substituída por _calibrate_and_get_source_rate()
