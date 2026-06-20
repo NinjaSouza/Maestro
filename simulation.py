@@ -957,7 +957,11 @@ class SimulationRunner:
             return flux_target * wafer_x_cm * wafer_y_cm
         
         # FIX FASE 2: Obter geometria e materiais OpenMC explícitos
-        geometry_result = self.sp.get("geometry_result", {})
+        # geometry_result foi injetado em system_params como '_geometry_result' pelo maestro.py
+        geometry_result = self.sp.get("_geometry_result", {})
+        if not geometry_result:
+            # Fallback: tentar também 'geometry_result' (caso seja passado diretamente)
+            geometry_result = self.sp.get("geometry_result", {})
         openmc_geometry = geometry_result.get("openmc_geometry")
         openmc_materials = geometry_result.get("openmc_materials")
         
