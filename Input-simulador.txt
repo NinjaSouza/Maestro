@@ -20,9 +20,12 @@ TEMPO_DE_RESFRIAMENTO_H 12
 # ============================================================================
 # PARÂMETROS DE SIMULAÇÃO OPENMC
 # ============================================================================
-NEUTRONS_POR_PASSO 1000	# Nêutrons por batch
+# NOTA V242: Para produção, recomenda-se mínimo de 100.000 nêutrons/batch × 10 batches
+# para obter estatística adequada (incerteza < 5%). Valores baixos (ex: 1000) são
+# aceitáveis apenas para testes rápidos de geometria, NÃO para resultados físicos.
+NEUTRONS_POR_PASSO 100000	# Nêutrons por batch (produção: 100.000+)
 BATCHES 10                     # Número de batches ativos
-INACTIVE_BATCHES 1              # Número de batches inativos (burnup)
+INACTIVE_BATCHES 0              # Número de batches inativos (0 para fixed source)
 
 # ============================================================================
 # FONTE DE NÊUTRONS
