@@ -15,7 +15,7 @@ SIMULATION_MODE ACTIVATION
 TEMPO_TOTAL_H 168		# Tempo total de irradiação (horas)
 DT_H 24				# Timestep inicial (horas)
 TIMESTEP_ADAPTATIVO false	# Timesteps adaptativos (true/false)
-TEMPO DE RESFRIAMENTO_H 12
+TEMPO_DE_RESFRIAMENTO_H 12
 
 # ============================================================================
 # PARÂMETROS DE SIMULAÇÃO OPENMC
