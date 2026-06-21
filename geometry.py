@@ -409,6 +409,18 @@ class GeometryBuilder:
         layers: list,
         wafer_geom: dict,
     ) -> Tuple[Dict[str, openmc.Material], openmc.Materials]:
+        """Constrói materiais OpenMC a partir das camadas.
+        
+        FIX V242: Adiciona reset_auto_ids para evitar IDWarning quando
+        o script é executado múltiplas vezes no mesmo ambiente.
+        """
+        # FIX V242: Limpa IDs automáticos para evitar conflitos
+        try:
+            openmc.reset_auto_ids()
+            _log.debug("IDs automáticos do OpenMC resetados")
+        except AttributeError:
+            _log.debug("openmc.reset_auto_ids() não disponível nesta versão")
+        
         area_cm2 = wafer_geom["area_cm2"]
         materials_dict: Dict[str, openmc.Material] = {}
         mat_list: List[openmc.Material] = []

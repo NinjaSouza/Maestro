@@ -134,11 +134,17 @@ class SourceCalibrationConfig:
     MAX_ITERATIONS: int = 10
     
     # Contagem de partículas por simulação de calibração
-    # Valor menor que produção para velocidade, mas suficiente para estatística
-    PARTICLES_PER_ITERATION: int = 50_000
+    # Valor ajustado para equilíbrio entre velocidade e estatística
+    # 100.000 partículas × 10 batches = 1M histórias por iteração
+    PARTICLES_PER_ITERATION: int = 100_000
     
     # Batches por iteração de calibração
-    BATCHES_PER_ITERATION: int = 5
+    BATCHES_PER_ITERATION: int = 10
+    
+    # Nota: Estes valores são PARA CALIBRAÇÃO (Phase D).
+    # Os valores de produção para as iterações de depleção são lidos do
+    # Input-simulador.txt (NEUTRONS_POR_PASSO, BATCHES) via parser.py.
+    # Para produção, recomenda-se mínimo de 100.000 partículas × 10 batches.
     
     # Fator de under-relaxation para estabilidade numérica
     # Evita oscilações quando ruído estatístico é alto
@@ -383,10 +389,13 @@ class SimulationDefaults:
     # ── Monte Carlo ─────────────────────────────────────────────────────────
     FLUX:           float = 1e13      # fluxo de nêutrons [n/cm²/s]
     SOURCE_TEMP_K:  float = 300.0     # temperatura da fonte [K]
-    NPARTICLES:     int   = 100_000   # nêutrons por passo Monte Carlo
+    NPARTICLES:     int   = 100_000   # nêutrons por passo Monte Carlo (padrão para produção)
     NBATCHES:       int   = 10        # batches ativos
     NINACTIVE:      int   = 0         # batches inativos (0 para fixed source)
     NINACTIVE_EIGENVALUE: int = 50    # batches inativos para criticidade
+    
+    # Nota: Valores do Input-simulador.txt sobrescrevem estes defaults via parser
+    # Minimum recomendado para produção: 100.000 partículas × 10 batches = 1M histórias
 
     # ── Geometria / Material ─────────────────────────────────────────────────
     WAFER_SIDE_CM:  float = 1.69      # dimensão padrão do wafer [cm]

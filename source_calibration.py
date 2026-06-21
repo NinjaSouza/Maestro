@@ -122,7 +122,7 @@ class SourceCalibrator:
       - Usa chaves do contrato atual (cellsdict, water_front, etc.)
     """
     
-    VERSION = "V239"
+    VERSION = "V242"
     
     def __init__(
         self,
@@ -146,6 +146,14 @@ class SourceCalibrator:
         self.config = config or SourceCalibrationConfig()
         self.debug = debug
         
+        # FIX V242: Resetar IDs automáticos no início da calibração para evitar
+        # IDWarning quando o script é executado múltiplas vezes
+        try:
+            openmc.reset_auto_ids()
+            logger.debug("IDs automáticos do OpenMC resetados na inicialização do SourceCalibrator")
+        except AttributeError:
+            logger.debug("openmc.reset_auto_ids() não disponível nesta versão")
+        
         # Dimensões da fonte: deve cobrir APENAS o alvo (wafer)
         # BUG 2 FIX: Não incluir água lateral na área da fonte
         self.source_x_cm = self.wafer_x_cm
@@ -165,7 +173,7 @@ class SourceCalibrator:
         self._calibration_volume_cm3 = 0.0
         
         logger.info(
-            "SourceCalibrator V239 initialized: flux_target=%.4e n/cm²/s, "
+            "SourceCalibrator V242 initialized: flux_target=%.4e n/cm²/s, "
             "target_area=%.4f cm², source_area=%.4f cm², source_rate_initial=%.4e n/s",
             self.flux_target, self.target_face_area_cm2, self.source_area_cm2, 
             self.source_rate_initial,
@@ -186,6 +194,13 @@ class SourceCalibrator:
                 tally_used=self.config.CALIBRATION_TALLY_NAME,
                 error_message="OpenMC não disponível",
             )
+        
+        # FIX V242: Resetar IDs automáticos antes de cada execução de calibração
+        try:
+            openmc.reset_auto_ids()
+            logger.debug("IDs automáticos resetados no início do run()")
+        except AttributeError:
+            pass
         
         if not self.config.ENABLE_CALIBRATION:
             logger.warning("Calibração desabilitada — usando source_rate inicial")
