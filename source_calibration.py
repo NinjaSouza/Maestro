@@ -387,23 +387,66 @@ class SourceCalibrator:
         
         try:
             with openmc.StatePoint(str(sp_path)) as sp:
+                # Lista todos os tallies disponíveis para debug
+                logger.info("Tallies disponíveis no statepoint: %s", [t.name for t in sp.tallies.values()])
+                
                 tally = sp.get_tally(name=self.config.CALIBRATION_TALLY_NAME)
                 df = tally.get_pandas_dataframe()
                 
-                # Extrai fluxo médio (por partícula-fonte) e incerteza
-                # FIX: Usar .values e flatten para evitar erro com arrays do NumPy
+                # LOG DETALHADO PARA DEBUG V240b
+                logger.info("Tally '%s': shape=%s, columns=%s", 
+                           self.config.CALIBRATION_TALLY_NAME, df.shape, list(df.columns))
+                logger.info("Tipos das colunas: %s", {col: df[col].dtype for col in df.columns})
+                logger.debug("Conteúdo completo do DataFrame:\n%s", df.to_string())
+                
+                # Debug: verifica se há arrays nas colunas mean e std. dev.
                 if "mean" in df.columns:
-                    mean_values = df["mean"].values
-                    # Soma todos os valores de mean (pode ser array multidimensional)
-                    # Usa np.atleast_1d e flatten para garantir que funciona com arrays aninhados
-                    mean_flux_per_particle = float(np.sum(np.atleast_1d(mean_values).flatten()))
+                    for idx, row in df.iterrows():
+                        mean_val = row["mean"]
+                        logger.debug("Linha %d - mean: %r (tipo: %s)", idx, mean_val, type(mean_val))
+                
+                # Extrai fluxo médio (por partícula-fonte) e incerteza
+                # FIX V240b: Extração robusta para OpenMC 0.15.3
+                # O problema é que df["mean"] pode conter arrays numpy quando há múltiplos filtros
+                # Solução: iterar sobre todas as linhas e somar todos os valores numéricos
+                mean_flux_per_particle = 0.0
+                std_flux = 0.0
+                
+                if "mean" in df.columns:
+                    for idx, row in df.iterrows():
+                        mean_val = row["mean"]
+                        # Se mean_val for um array/numpy array, soma seus elementos
+                        if hasattr(mean_val, '__iter__') and not isinstance(mean_val, str):
+                            try:
+                                mean_flux_per_particle += float(np.sum(np.asarray(mean_val)))
+                            except (TypeError, ValueError) as e:
+                                logger.warning("Erro ao processar mean_val na linha %d: %s", idx, e)
+                                pass
+                        else:
+                            try:
+                                mean_flux_per_particle += float(mean_val)
+                            except (TypeError, ValueError) as e:
+                                logger.warning("Erro ao converter mean_val na linha %d: %s", idx, e)
+                                pass
+                    logger.info("Fluxo médio total (soma de %d linhas): %.6e", len(df), mean_flux_per_particle)
                 else:
                     logger.error("Coluna 'mean' não encontrada no DataFrame do tally")
                     return 0.0, 0.0, 0.0
-                    
+                
                 if "std. dev." in df.columns:
-                    std_values = df["std. dev."].values
-                    std_flux = float(np.sum(np.atleast_1d(std_values).flatten()))
+                    for idx, row in df.iterrows():
+                        std_val = row["std. dev."]
+                        if hasattr(std_val, '__iter__') and not isinstance(std_val, str):
+                            try:
+                                std_flux += float(np.sum(np.asarray(std_val)))
+                            except (TypeError, ValueError):
+                                pass
+                        else:
+                            try:
+                                std_flux += float(std_val)
+                            except (TypeError, ValueError):
+                                pass
+                    logger.info("Desvio padrão total (soma de %d linhas): %.6e", len(df), std_flux)
                 else:
                     std_flux = 0.0
                 
@@ -432,8 +475,10 @@ class SourceCalibrator:
     def _get_calibration_volume(self, tally: openmc.Tally, sp: openmc.StatePoint) -> float:
         """
         Obtém volume da região de calibração a partir do tally ou geometria.
+        
+        FIX V240b: Tenta múltiplas estratégias para obter o volume corretamente.
         """
-        # Tenta obter volume dos filtros do tally
+        # Estratégia 1: Tenta obter volume dos filtros do tally via summary
         for filt in tally.filters:
             if isinstance(filt, openmc.CellFilter):
                 # Obtém células do filtro
@@ -449,13 +494,21 @@ class SourceCalibrator:
                                 cell = summary.geometry.get_cell_by_id(cell_id)
                                 if cell and hasattr(cell, 'volume') and cell.volume is not None:
                                     total_vol += float(cell.volume)
-                        except Exception:
-                            pass
+                                    logger.debug("Célula %d: volume = %.6f cm³ (do summary)", cell_id, cell.volume)
+                        except Exception as e:
+                            logger.debug("Erro ao obter volume da célula %d: %s", cell_id, e)
                     
                     if total_vol > 0.0:
+                        logger.info("Volume total das células do filtro: %.6f cm³", total_vol)
                         return total_vol
         
-        return 0.0  # Volume não determinado
+        # Estratégia 2: Calcula volume a partir da área da face × espessura da camada
+        logger.warning("Volume não encontrado no summary - calculando a partir da geometria")
+        thickness_cm = self._estimate_first_layer_thickness()
+        volume_calc = self.target_face_area_cm2 * thickness_cm
+        logger.info("Volume calculado: área (%.4f cm²) × espessura (%.4f cm) = %.6f cm³", 
+                   self.target_face_area_cm2, thickness_cm, volume_calc)
+        return volume_calc
     
     def _estimate_first_layer_thickness(self) -> float:
         """Estima espessura da primeira camada do alvo."""
@@ -603,12 +656,15 @@ class SourceCalibrator:
             first_layer_cell.id if hasattr(first_layer_cell, 'id') else '?',
         )
         
-        # Tally de fluxo na primeira camada
+        # Tally de fluxo na primeira camada - APENAS CellFilter para evitar arrays multidimensionais
+        # OpenMC 0.15.3 retorna arrays numpy quando há múltiplos filtros (ex: CellFilter + EnergyFilter)
+        # Para calibração, precisamos apenas do fluxo total integrado, não por grupo de energia
         cell_filter = openmc.CellFilter([first_layer_cell])
         
         tally = openmc.Tally(name=self.config.CALIBRATION_TALLY_NAME)
-        tally.filters = [cell_filter]
+        tally.filters = [cell_filter]  # Apenas CellFilter, SEM EnergyFilter
         tally.scores = ["flux"]
+        tally.estimator = "tracklength"  # Estimador padrão para fluxo
         
         # Estima volume da região para conversão posterior
         self._calibration_volume_cm3 = self._estimate_first_layer_thickness() * self.target_face_area_cm2
