@@ -391,8 +391,21 @@ class SourceCalibrator:
                 df = tally.get_pandas_dataframe()
                 
                 # Extrai fluxo médio (por partícula-fonte) e incerteza
-                mean_flux_per_particle = float(df["mean"].sum())
-                std_flux = float(df["std. dev."].sum()) if "std. dev." in df.columns else 0.0
+                # FIX: Usar .values e flatten para evitar erro com arrays do NumPy
+                if "mean" in df.columns:
+                    mean_values = df["mean"].values
+                    # Soma todos os valores de mean (pode ser array multidimensional)
+                    # Usa np.atleast_1d e flatten para garantir que funciona com arrays aninhados
+                    mean_flux_per_particle = float(np.sum(np.atleast_1d(mean_values).flatten()))
+                else:
+                    logger.error("Coluna 'mean' não encontrada no DataFrame do tally")
+                    return 0.0, 0.0, 0.0
+                    
+                if "std. dev." in df.columns:
+                    std_values = df["std. dev."].values
+                    std_flux = float(np.sum(np.atleast_1d(std_values).flatten()))
+                else:
+                    std_flux = 0.0
                 
                 # Obtém volume da região de calibração
                 # O volume está nos filtros ou pode ser calculado da geometria
