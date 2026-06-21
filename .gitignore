@@ -1,1 +1,43 @@
-(source_calibration.py is a source file, and there are no build artifacts, dependencies, or temporary files in the changes)
+```
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Dependencies
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*$pycache$*
+```

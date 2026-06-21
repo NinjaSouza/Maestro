@@ -776,23 +776,66 @@ class SimulationRunner:
 
         pyne_mats: Dict[int, object] = {}
         for om in final_mats:
-            comp = {}
-            for nuc, dens in om.get_nuclide_atom_densities().items():
-                if dens <= 0.0:
+            # CORREÇÃO CRÍTICA #1: Converter densidades atômicas [atom/b-cm] para frações mássicas
+            atom_densities = om.get_nuclide_atom_densities()  # Dict[str, float] em atom/b-cm
+            if not atom_densities:
+                continue
+
+            # Calcular densidade atômica total para normalização
+            total_atom_dens = sum(atom_densities.values())
+            if total_atom_dens <= 0:
+                continue
+
+            comp_mass_frac: Dict[int, float] = {}
+            total_mass_g = 0.0
+
+            for nuc_str, atom_dens in atom_densities.items():
+                if atom_dens <= 0:
                     continue
+                
+                # CORREÇÃO CRÍTICA #2: Preservar sufixos metaestáveis (_m1, _m2)
+                # Tentar conversão direta primeiro (funciona para a maioria)
                 try:
-                    comp[_pync.id(nuc)] = dens
+                    pyne_id = _pync.id(nuc_str)
                 except Exception:
-                    pass
-            if comp:
-                om_mass = 1.0
+                    # Fallback: remover hífen se presente e tentar novamente
+                    try:
+                        clean_name = nuc_str.replace("-", "")
+                        pyne_id = _pync.id(clean_name)
+                    except Exception:
+                        self.logger.warning(f"Não foi possível mapear nuclídeo {nuc_str} para PyNE; ignorando.")
+                        continue
+
+                # Obter massa atômica (g/mol) para converter átomos → massa
                 try:
-                    val = om.get_mass() if callable(getattr(om, "get_mass", None)) else None
-                    if val and val > 0.0:
-                        om_mass = val
+                    atomic_mass = _pynucdata.atomic_mass(pyne_id)  # em amu (g/mol)
                 except Exception:
-                    pass
-                pyne_mats[om.id] = _PyNEMat(comp, mass=om_mass)
+                    # Fallback seguro: usar número de massa (A)
+                    A = int(_pynucname.aname(pyne_id))
+                    atomic_mass = float(A)
+                    self.logger.debug(f"Usando massa aproximada {A} para {nuc_str}")
+
+                # Cálculo da massa deste nuclídeo no material
+                # atom_dens [atom/b-cm] * 1e24 [b/cm²] * atomic_mass [g/mol] / N_A = mass_dens [g/cm³]
+                mass_dens = atom_dens * 1e24 * atomic_mass / _AVOGADRO
+                comp_mass_frac[pyne_id] = mass_dens
+                total_mass_g += mass_dens
+
+            # Normalizar para frações mássicas (soma = 1.0)
+            if total_mass_g <= 0:
+                continue
+            
+            final_comp = {nid: m / total_mass_g for nid, m in comp_mass_frac.items()}
+            
+            # Obter massa total correta do objeto OpenMC
+            try:
+                om_mass = om.get_mass() if hasattr(om, "get_mass") else None
+                if om_mass is None or om_mass <= 0:
+                    om_mass = total_mass_g  # Usar a soma calculada como fallback
+            except Exception:
+                om_mass = total_mass_g
+
+            pyne_mats[om.id] = _PyNEMat(final_comp, mass=om_mass)
 
         if not pyne_mats:
             return None

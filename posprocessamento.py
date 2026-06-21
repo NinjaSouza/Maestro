@@ -668,31 +668,59 @@ class PyneDecayProcessor:
     # ------------------------------------------------------------------
     @staticmethod
     def _to_pyne_id(nuc_str: str) -> Optional[int]:
-        """Converte string OpenMC (e.g. 'Zn64', 'Tc99_m1') → int PyNE."""
+        """Converte string OpenMC (e.g. 'Zn64', 'Tc99_m1') → int PyNE.
+        
+        CORREÇÃO CRÍTICA: Preservar sufixos metaestáveis (_m1, _m2, etc.)
+        para não perder informação de estado excitado no decaimento.
+        """
         if not HAS_PYNE:
             return None
+        
+        # Tentativa 1: Conversão direta (funciona para maioria dos casos)
         try:
             return pynenucname.id(nuc_str)
         except Exception:
             pass
-        base = re.sub(r"_m\d+$", "", nuc_str)
+        
+        # Tentativa 2: Normalizar formato (remover hífen se presente)
+        normalized = nuc_str.replace("-", "")
         try:
-            return pynenucname.id(base)
+            return pynenucname.id(normalized)
         except Exception:
-            return None
+            pass
+        
+        # ⚠️ NÃO REMOVER sufixos _m! Metaestáveis são nuclídeos distintos no PyNE
+        # Exemplo: Tc99_m1 (6.01h) e Tc99 (2.1e5 anos) têm decaimentos diferentes
+        # O código anterior fazia: base = re.sub(r"_m\d+$", "", nuc_str)
+        # Isso causava perda de atividade do metaestável e distribuição errada
+        
+        return None
 
     @staticmethod
     def _pyne_id_to_openmc_str(nuc_id: int) -> str:
-        """Converte int PyNE → string OpenMC."""
+        """Converte int PyNE → string OpenMC.
+        
+        CORREÇÃO: Garantir compatibilidade de formato (sem hífen).
+        """
         if not HAS_PYNE:
             return str(nuc_id)
+        
+        # Tentativa 1: Formato OpenMC padrão (ex: "Tc99_m1")
         try:
-            return pynenucname.openmc(nuc_id)
+            name = pynenucname.openmc(nuc_id)
+            # Remover hífen se presente (PyNE pode retornar "Tc-99_m1")
+            return name.replace("-", "")
         except Exception:
-            try:
-                return pynenucname.name(nuc_id)
-            except Exception:
-                return str(nuc_id)
+            pass
+        
+        # Tentativa 2: Formato nome simples (ex: "Tc99")
+        try:
+            return pynenucname.name(nuc_id).replace("-", "")
+        except Exception:
+            pass
+        
+        # Fallback: retornar ID numérico como string
+        return str(nuc_id)
 
     @staticmethod
     def _empty_result(reason: str) -> Dict[str, Any]:
