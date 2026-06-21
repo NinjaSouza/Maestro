@@ -146,9 +146,10 @@ class SourceCalibrator:
         self.config = config or SourceCalibrationConfig()
         self.debug = debug
         
-        # Dimensões da fonte: deve cobrir alvo + água lateral
-        self.source_x_cm = self.wafer_x_cm + 2.0 * self.water_lateral_cm
-        self.source_y_cm = self.wafer_y_cm + 2.0 * self.water_lateral_cm
+        # Dimensões da fonte: deve cobrir APENAS o alvo (wafer)
+        # BUG 2 FIX: Não incluir água lateral na área da fonte
+        self.source_x_cm = self.wafer_x_cm
+        self.source_y_cm = self.wafer_y_cm
         self.source_area_cm2 = self.source_x_cm * self.source_y_cm
         
         # Área da face do alvo para chute inicial (FÍSICAMENTE CORRETO)
@@ -368,13 +369,10 @@ class SourceCalibrator:
         
         logger.debug("XMLs exportados para: %s", temp_dir.absolute())
         
-        # Executa OpenMC
+        # Executa OpenMC (API >= 0.13 não aceita particles/batches como kwargs)
+        # BUG 1 FIX: Remover kwargs inválidos - settings já estão no model.xml
         try:
-            openmc.run(
-                cwd=str(temp_dir),
-                particles=settings.particles,
-                batches=settings.batches,
-            )
+            openmc.run(cwd=str(temp_dir))
         except Exception as exc:
             logger.error("OpenMC falhou na calibração: %s", exc)
             return 0.0, 0.0, 0.0

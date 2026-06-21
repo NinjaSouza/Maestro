@@ -35,12 +35,12 @@
 
 # Exemplo com 1 camada e 2 materiais (seu caso atual):
 # CAMADA_ID     MATERIAL        MASSA_G     TEMP_K
-CAMADA_1    Aluminum, Alloy 6061-T6    3.31    313
-CAMADA_2    UAl2_20                    1.187   313
-CAMADA_2    UAl3_20                    3.739   313
-CAMADA_2    UAl4_20                    6.944   313
-CAMADA_2    Al                        25.220   313
-CAMADA_3    Aluminum, Alloy 6061-T6    3.31    313
+CAMADA_1    Al6061    3.31    313
+CAMADA_2    UAl2_20   1.187   313
+CAMADA_2    UAl3_20   3.739   313
+CAMADA_2    UAl4_20   6.944   313
+CAMADA_2    Al        25.220  313
+CAMADA_3    Al6061    3.31    313
 
 
 # ============================================================================

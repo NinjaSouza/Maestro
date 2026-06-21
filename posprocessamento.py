@@ -1899,6 +1899,8 @@ class PostProcessor:
                 result["notable_daughters"] = {}
 
             # ── F5: Ativação estrutural ───────────────────────────────
+            # BUG 6 FIX: Processar APENAS CAMADA_1 e CAMADA_3 (estruturais)
+            # CAMADA_2 (combustível) já foi depletada pelo OpenMC IndependentOperator
             self.log.info("── F5: StructuralActivationSolver")
             structural_activation: Dict[str, Any] = {}
             if HAS_CHAINSOLVE:
@@ -1908,6 +1910,11 @@ class PostProcessor:
                     lname = mat_id_to_name.get(
                         str(mat_id), f"material_{mat_id}"
                     )
+                    
+                    # BUG 6 FIX: Pular CAMADA_2 (combustível) - já processada pelo OpenMC
+                    if "CAMADA_2" in lname or "COMBUSTIVEL" in lname.upper():
+                        self.log.info(f"[F5] Pulando {lname}: combustível já depletado pelo OpenMC")
+                        continue
 
                     def _atoms_to_grams(nuc: str, n_atoms: float) -> float:
                         """Converte número de átomos → gramas via massa atômica."""
