@@ -56,11 +56,15 @@ if _MODULE_DIR not in sys.path:
 
 from config import ValidationLimits, TNLoopConfig, CoolingConfig, SimulationDefaults
 
+# Import conditional do pyne_bridge - só necessário se THERMAL_COUPLING=true
+_BRIDGE = None
 try:
-    from pyne_bridge import BRIDGE
+    from pyne_bridge import BRIDGE as _BRIDGE_OBJ
+    _BRIDGE = _BRIDGE_OBJ
 except ImportError as _e:
-    print(f"\n[MAESTRO] ERRO CRÍTICO: {_e}")
-    sys.exit(1)
+    # Não falha aqui - vai falhar apenas se THERMAL_COUPLING=true for usado
+    logger_warning_early = lambda msg: print(f"[MAESTRO] AVISO: {msg}")
+    logger_warning_early(f"pyne_bridge não disponível ({_e}) - THERMAL_COUPLING deve ser false")
 
 _LOG_FILE = Path(_MODULE_DIR) / "maestro_v235.log"
 
@@ -500,7 +504,14 @@ class MaestroV237:
                 self.audit.warnings.append(f"Phase E: {r.get('error', '?')}")
 
             # ── F: T-N Loop ──────────────────────────────────────────────────
-            if TNLoopConfig.ENABLE_TN_COUPLING:
+            # Verifica flag do usuário (thermal_coupling) E a configuração global
+            sp = context["parser_data"].get("simulation_parameters", {})
+            user_thermal_flag = sp.get("thermal_coupling")
+            tn_enabled = (
+                user_thermal_flag is not None and bool(user_thermal_flag) and
+                TNLoopConfig.ENABLE_TN_COUPLING
+            )
+            if tn_enabled:
                 logger.info("PHASE F — T-N LOOP (Picard)")
                 r = self.phase_f_tn_loop(
                     geometry_result=context["geometry_result"],
@@ -513,6 +524,10 @@ class MaestroV237:
                 converged = hist[-1].get("converged", False) if hist else False
                 logger.info("  OK iterações=%d  convergiu=%s",
                             len(hist), "SIM" if converged else "NÃO")
+            elif user_thermal_flag is not None and not bool(user_thermal_flag):
+                logger.info("PHASE F — T-N LOOP SKIP (THERMAL_COUPLING=false no input)")
+            else:
+                logger.info("PHASE F — T-N LOOP SKIP (ENABLE_TN_COUPLING=false em config)")
 
             # ── G: Posprocessamento ──────────────────────────────────────────
             cooling_cfg = CoolingConfig.from_simulation_params(
@@ -864,8 +879,13 @@ class MaestroV237:
             if it == 0:
                 temp_map = temp_map_raw
             else:
+                # BRIDGE só está disponível se pyne_bridge foi importado com sucesso
+                if _BRIDGE is None:
+                    logger.error("pyne_bridge não disponível - necessário para THERMAL_COUPLING=true")
+                    self.audit.phase_f.complete(False, "pyne_bridge não disponível")
+                    return initial_sim
                 temp_map = {
-                    k: BRIDGE.apply_underrelaxation(v, thermal.last_temp_map.get(k, v))
+                    k: _BRIDGE.apply_underrelaxation(v, thermal.last_temp_map.get(k, v))
                     for k, v in temp_map_raw.items()
                 }
 

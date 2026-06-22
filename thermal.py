@@ -16,7 +16,15 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from pyne_bridge import BRIDGE
+# Import condicional do pyne_bridge - só necessário se THERMAL_COUPLING=true
+try:
+    from pyne_bridge import BRIDGE
+    _PYNE_BRIDGE_AVAILABLE = True
+except ImportError as _e:
+    BRIDGE = None
+    _PYNE_BRIDGE_AVAILABLE = False
+    logger.warning(f"pyne_bridge não disponível ({_e}) - thermal solver requer THERMAL_COUPLING=true")
+
 from config import TNLoopConfig, ValidationLimits, ThermalSolverConfig
 
 logger = logging.getLogger(__name__)
