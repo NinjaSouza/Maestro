@@ -747,6 +747,12 @@ class SimulationRunner:
     # ── Cooling PyNE ──────────────────────────────────────────────────────────
 
     def _run_cooling_pyne(self) -> Optional[Path]:
+        # Verifica se thermal_coupling está desativado - se sim, pula cooling
+        user_flag = self.sp.get("thermal_coupling")
+        if user_flag is not None and not bool(user_flag):
+            self.logger.info("thermal_coupling=False — skipping PyNE cooling (openMC-only mode)")
+            return None
+        
         if not _PYNE:
             self.logger.error("PyNE não instalado — cooling indisponível.")
             return None

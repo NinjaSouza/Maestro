@@ -13,10 +13,19 @@ import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from pyne.material import Material
-from pyne.material_library import MaterialLibrary
-from pyne import nucname
-from pyne import data as pynedata
+try:
+    from pyne.material import Material
+    from pyne.material_library import MaterialLibrary
+    from pyne import nucname
+    from pyne import data as pynedata
+    _PYNE_AVAILABLE = True
+except ImportError:
+    _PYNE_AVAILABLE = False
+    # Stubs para modo openMC-only
+    Material = None
+    MaterialLibrary = None
+    nucname = None
+    pynedata = None
 
 import openmc
 
@@ -25,11 +34,14 @@ from config import ValidationLimits, TNLoopConfig, PhysicsConstants
 _logger = logging.getLogger(__name__)
 _VLIMITS = ValidationLimits()
 
-try:
-    import pyne as _pyne_pkg
-    NUC_DATA = str(_pyne_pkg.nuc_data)
-except Exception:
-    NUC_DATA = str(Path.home() / ".local/lib/python3.12/site-packages/pyne/nuc_data.h5")
+if _PYNE_AVAILABLE:
+    try:
+        import pyne as _pyne_pkg
+        NUC_DATA = str(_pyne_pkg.nuc_data)
+    except Exception:
+        NUC_DATA = str(Path.home() / ".local/lib/python3.12/site-packages/pyne/nuc_data.h5")
+else:
+    NUC_DATA = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,11 +166,16 @@ class PyNEBridge:
     _N_A:     float = PhysicsConstants.N_A
 
     def __init__(self) -> None:
-        self.lib: MaterialLibrary = self._build_library()
+        if _PYNE_AVAILABLE:
+            self.lib: Optional[MaterialLibrary] = self._build_library()
+        else:
+            self.lib = None
 
     # ── Seção A: Material Library ─────────────────────────────────────────────
 
-    def _build_library(self) -> MaterialLibrary:
+    def _build_library(self) -> Optional[MaterialLibrary]:
+        if not _PYNE_AVAILABLE or MaterialLibrary is None:
+            return None
         lib = MaterialLibrary()
         for name, (comp, density) in MATERIALS.items():
             mat = Material(comp, density=density)
@@ -166,7 +183,9 @@ class PyNEBridge:
             lib[name] = mat
         return lib
 
-    def _get(self, name: str) -> Material:
+    def _get(self, name: str) -> Optional[Material]:
+        if not _PYNE_AVAILABLE or self.lib is None:
+            return None
         key = name.encode() if isinstance(name, str) else name
         if name in self.lib:
             return self.lib[name]
@@ -180,6 +199,8 @@ class PyNEBridge:
         )
 
     def list_materials(self) -> List[str]:
+        if not _PYNE_AVAILABLE or self.lib is None:
+            return []
         return sorted(str(k.decode() if isinstance(k, bytes) else k)
                       for k in self.lib.keys())
 
