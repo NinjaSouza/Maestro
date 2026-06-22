@@ -122,7 +122,7 @@ class SourceCalibrator:
       - Usa chaves do contrato atual (cellsdict, water_front, etc.)
     """
     
-    VERSION = "V242"
+    VERSION = "V243b"
     
     def __init__(
         self,
@@ -437,14 +437,36 @@ class SourceCalibrator:
                                 np.shape(tally_mean), type(tally_mean))
                     
                     # Soma todos os valores de fluxo (integra sobre todas as dimensões)
+                    # FIX V243b: Usar função _sum_nested para evitar erro com arrays inhomogêneos
+                    # O erro "setting an array element with a sequence" ocorre quando tally.mean
+                    # contém arrays aninhados (ex: múltiplos filtros ou grupos de energia)
+                    def _sum_nested_safe(value):
+                        """Soma valores mesmo em estruturas aninhadas/inhomogêneas."""
+                        if value is None:
+                            return 0.0
+                        if isinstance(value, (str, bytes)):
+                            return 0.0
+                        if hasattr(value, '__iter__'):
+                            # É iterável: soma recursivamente todos os elementos
+                            total = 0.0
+                            for item in value:
+                                total += _sum_nested_safe(item)
+                            return total
+                        else:
+                            # Valor escalar
+                            try:
+                                return float(value)
+                            except (TypeError, ValueError):
+                                return 0.0
+                    
                     if tally_mean is not None and np.size(tally_mean) > 0:
-                        mean_flux_per_particle = float(np.sum(tally_mean))
+                        mean_flux_per_particle = _sum_nested_safe(tally_mean)
                         logger.info("Fluxo médio (tally.mean): %.6e", mean_flux_per_particle)
                     else:
                         logger.warning("tally.mean está vazio ou None")
                     
                     if tally_std is not None and np.size(tally_std) > 0:
-                        std_flux = float(np.sum(tally_std))
+                        std_flux = _sum_nested_safe(tally_std)
                         logger.info("Desvio padrão (tally.std_dev): %.6e", std_flux)
                     else:
                         std_flux = 0.0
@@ -454,21 +476,30 @@ class SourceCalibrator:
                     logger.info("Tentando fallback com pandas DataFrame...")
                     
                     # Fallback: método anterior com pandas
+                    # FIX V243: Usar função auxiliar para somar valores aninhados corretamente
+                    def _sum_nested(value):
+                        """Soma valores mesmo em estruturas aninhadas/inhomogêneas."""
+                        if value is None:
+                            return 0.0
+                        if isinstance(value, (str, bytes)):
+                            return 0.0
+                        if hasattr(value, '__iter__'):
+                            # É iterável: soma recursivamente todos os elementos
+                            total = 0.0
+                            for item in value:
+                                total += _sum_nested(item)
+                            return total
+                        else:
+                            # Valor escalar
+                            try:
+                                return float(value)
+                            except (TypeError, ValueError):
+                                return 0.0
+                    
                     if "mean" in df.columns:
                         for idx, row in df.iterrows():
                             mean_val = row["mean"]
-                            if hasattr(mean_val, '__iter__') and not isinstance(mean_val, str):
-                                try:
-                                    mean_flux_per_particle += float(np.sum(np.asarray(mean_val)))
-                                except (TypeError, ValueError) as e2:
-                                    logger.warning("Erro ao processar mean_val na linha %d: %s", idx, e2)
-                                    pass
-                            else:
-                                try:
-                                    mean_flux_per_particle += float(mean_val)
-                                except (TypeError, ValueError) as e2:
-                                    logger.warning("Erro ao converter mean_val na linha %d: %s", idx, e2)
-                                    pass
+                            mean_flux_per_particle += _sum_nested(mean_val)
                         logger.info("Fluxo médio total (DataFrame fallback): %.6e", mean_flux_per_particle)
                     else:
                         logger.error("Coluna 'mean' não encontrada no DataFrame do tally")
@@ -477,16 +508,7 @@ class SourceCalibrator:
                     if "std. dev." in df.columns:
                         for idx, row in df.iterrows():
                             std_val = row["std. dev."]
-                            if hasattr(std_val, '__iter__') and not isinstance(std_val, str):
-                                try:
-                                    std_flux += float(np.sum(np.asarray(std_val)))
-                                except (TypeError, ValueError):
-                                    pass
-                            else:
-                                try:
-                                    std_flux += float(std_val)
-                                except (TypeError, ValueError):
-                                    pass
+                            std_flux += _sum_nested(std_val)
                         logger.info("Desvio padrão total (DataFrame fallback): %.6e", std_flux)
                     else:
                         std_flux = 0.0
