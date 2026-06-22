@@ -1,1 +1,1 @@
-(pyne_bridge.py and simulation.py are source files, no build artifacts, dependencies, or temp files in the changes)
+Nothing should be ignored based on the provided file changes. The modified files ('maestro.py', 'thermal.py') are source code files that should not be added to .gitignore.
