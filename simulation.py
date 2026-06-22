@@ -162,8 +162,17 @@ class SimulationRunner:
         # Quando FLUXO + espectro são fornecidos, deve-se executar calibração
         # para encontrar source_rate que reproduza o fluxo-alvo experimental.
         # O valor calibrado é congelado e usado em toda a depleção.
+        # 
+        # FIX V244: Em modo THERMAL_COUPLING=false, pula calibração e usa
+        # cálculo direto source_rate = flux × area (openMC-only mode)
         
-        source_rate = self._calibrate_and_get_source_rate()
+        if not self._tn_enabled():
+            # Modo openMC-only: sem calibração, sem PyNE, sem acoplamento térmico
+            self.logger.info("THERMAL_COUPLING=false — usando modo openMC-only (sem calibração)")
+            source_rate = self._calc_source_rate_direct()
+        else:
+            source_rate = self._calibrate_and_get_source_rate()
+            
         if source_rate is None:
             return SimulationResult(success=False, depletion_h5=None, cooling_json=None,
                                     error_msg="source_rate inválido após calibração")
@@ -267,9 +276,16 @@ class SimulationRunner:
 
         self._move_results()
 
+        # FIX V244: Em modo THERMAL_COUPLING=false, não executa cooling PyNE
+        # O openMC pode fazer decaimento via chain file, mas fatores térmicos requerem PyNE
         cool_json = None
-        if self.cooling_hours > 0.0:
+        if self.cooling_hours > 0.0 and self._tn_enabled():
             cool_json = self._run_cooling_pyne()
+        elif self.cooling_hours > 0.0 and not self._tn_enabled():
+            self.logger.info(
+                "THERMAL_COUPLING=false — skipping PyNE cooling (openMC-only mode). "
+                "Decaimento durante irradiação já feito pelo OpenMC via chain file."
+            )
 
         if self._tn_history:
             self._save_json(self._tn_history, self.temp_dir / "tn_loop_history.json", "Histórico T-N")
@@ -1162,6 +1178,28 @@ class SimulationRunner:
             return None
         self.logger.warning("_calc_source_rate: usando fallback (Phase C não passou source_rate)")
         return sr
+
+    def _calc_source_rate_direct(self) -> Optional[float]:
+        """
+        FIX V244: Calcula source_rate diretamente sem calibração.
+        Usado apenas em modo THERMAL_COUPLING=false (openMC-only mode).
+        
+        Retorna: source_rate = flux × area [n/s]
+        """
+        x = float(self.sp.get("wafer_x_cm", self.sp.get("x", 1.69)))
+        y = float(self.sp.get("wafer_y_cm", self.sp.get("y", 1.69)))
+        flux = float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))
+        
+        source_rate = flux * x * y
+        if source_rate < 1.0:
+            self.logger.error("source_rate direto=%.3e < 1 n/s — inválido", source_rate)
+            return None
+        
+        self.logger.info(
+            "source_rate direto calculado: %.4e n/s (flux=%.4e × area=%.4f cm²)",
+            source_rate, flux, x * y
+        )
+        return source_rate
 
     def _estimate_n_u235_cm3(self) -> float:
         best = 0.0

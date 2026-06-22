@@ -437,7 +437,7 @@ class SourceCalibrator:
                                 np.shape(tally_mean), type(tally_mean))
                     
                     # Soma todos os valores de fluxo (integra sobre todas as dimensões)
-                    # FIX V243b: Usar função _sum_nested para evitar erro com arrays inhomogêneos
+                    # FIX V243b/V244: Usar função _sum_nested para evitar erro com arrays inhomogêneos
                     # O erro "setting an array element with a sequence" ocorre quando tally.mean
                     # contém arrays aninhados (ex: múltiplos filtros ou grupos de energia)
                     def _sum_nested_safe(value):
@@ -446,18 +446,40 @@ class SourceCalibrator:
                             return 0.0
                         if isinstance(value, (str, bytes)):
                             return 0.0
-                        if hasattr(value, '__iter__'):
-                            # É iterável: soma recursivamente todos os elementos
-                            total = 0.0
-                            for item in value:
-                                total += _sum_nested_safe(item)
-                            return total
-                        else:
-                            # Valor escalar
-                            try:
-                                return float(value)
-                            except (TypeError, ValueError):
+                        
+                        # Converte para numpy array se possível para melhor manipulação
+                        try:
+                            arr = np.asarray(value)
+                            # Se for um array numpy válido, soma todos os elementos
+                            if arr.ndim == 0:
+                                # Escalar numpy
+                                return float(arr.item()) if np.isfinite(arr).all() else 0.0
+                            elif arr.size == 0:
                                 return 0.0
+                            else:
+                                # Array multidimensional: soma recursivamente elementos finitos
+                                total = 0.0
+                                for item in arr.flat:
+                                    try:
+                                        if np.isfinite(item):
+                                            total += float(item)
+                                    except (TypeError, ValueError):
+                                        # Elemento não numérico: ignora
+                                        pass
+                                return total
+                        except (ValueError, TypeError):
+                            # Não é conversível para array numpy: trata como iterável genérico
+                            if hasattr(value, '__iter__'):
+                                total = 0.0
+                                for item in value:
+                                    total += _sum_nested_safe(item)
+                                return total
+                            else:
+                                # Valor escalar não-numpy
+                                try:
+                                    return float(value)
+                                except (TypeError, ValueError):
+                                    return 0.0
                     
                     if tally_mean is not None and np.size(tally_mean) > 0:
                         mean_flux_per_particle = _sum_nested_safe(tally_mean)
@@ -476,25 +498,42 @@ class SourceCalibrator:
                     logger.info("Tentando fallback com pandas DataFrame...")
                     
                     # Fallback: método anterior com pandas
-                    # FIX V243: Usar função auxiliar para somar valores aninhados corretamente
+                    # FIX V243/V244: Usar função auxiliar para somar valores aninhados corretamente
                     def _sum_nested(value):
                         """Soma valores mesmo em estruturas aninhadas/inhomogêneas."""
                         if value is None:
                             return 0.0
                         if isinstance(value, (str, bytes)):
                             return 0.0
-                        if hasattr(value, '__iter__'):
-                            # É iterável: soma recursivamente todos os elementos
-                            total = 0.0
-                            for item in value:
-                                total += _sum_nested(item)
-                            return total
-                        else:
-                            # Valor escalar
-                            try:
-                                return float(value)
-                            except (TypeError, ValueError):
+                        
+                        # Tenta converter para numpy array primeiro
+                        try:
+                            arr = np.asarray(value)
+                            if arr.ndim == 0:
+                                return float(arr.item()) if np.isfinite(arr).all() else 0.0
+                            elif arr.size == 0:
                                 return 0.0
+                            else:
+                                total = 0.0
+                                for item in arr.flat:
+                                    try:
+                                        if np.isfinite(item):
+                                            total += float(item)
+                                    except (TypeError, ValueError):
+                                        pass
+                                return total
+                        except (ValueError, TypeError):
+                            # Não é conversível para array: trata como iterável genérico
+                            if hasattr(value, '__iter__'):
+                                total = 0.0
+                                for item in value:
+                                    total += _sum_nested(item)
+                                return total
+                            else:
+                                try:
+                                    return float(value)
+                                except (TypeError, ValueError):
+                                    return 0.0
                     
                     if "mean" in df.columns:
                         for idx, row in df.iterrows():
