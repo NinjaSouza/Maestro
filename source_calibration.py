@@ -422,7 +422,7 @@ class SourceCalibrator:
                 
                 # Extrai fluxo médio (por partícula-fonte) e incerteza
                 # FIX V240b/V242: Extração robusta para OpenMC 0.15.3
-                # O problema é que df[\"mean\"] pode conter arrays numpy quando há múltiplos filtros
+                # O problema é que df["mean"] pode conter arrays numpy quando há múltiplos filtros
                 # Solução V242: Usar diretamente tally.mean com reshape adequado
                 mean_flux_per_particle = 0.0
                 std_flux = 0.0
@@ -433,25 +433,25 @@ class SourceCalibrator:
                     tally_mean = tally.mean
                     tally_std = tally.std_dev
                     
-                    logger.debug(\"tally.mean shape: %s, tipo: %s\", 
+                    logger.debug("tally.mean shape: %s, tipo: %s", 
                                 np.shape(tally_mean), type(tally_mean))
                     
                     # Soma todos os valores de fluxo (integra sobre todas as dimensões)
                     if tally_mean is not None and np.size(tally_mean) > 0:
                         mean_flux_per_particle = float(np.sum(tally_mean))
-                        logger.info(\"Fluxo médio (tally.mean): %.6e", mean_flux_per_particle)
+                        logger.info("Fluxo médio (tally.mean): %.6e", mean_flux_per_particle)
                     else:
-                        logger.warning(\"tally.mean está vazio ou None")
+                        logger.warning("tally.mean está vazio ou None")
                     
                     if tally_std is not None and np.size(tally_std) > 0:
                         std_flux = float(np.sum(tally_std))
-                        logger.info(\"Desvio padrão (tally.std_dev): %.6e", std_flux)
+                        logger.info("Desvio padrão (tally.std_dev): %.6e", std_flux)
                     else:
                         std_flux = 0.0
                         
                 except Exception as e:
-                    logger.warning(\"Erro ao usar tally.mean diretamente: %s", e)
-                    logger.info(\"Tentando fallback com pandas DataFrame...")
+                    logger.warning("Erro ao usar tally.mean diretamente: %s", e)
+                    logger.info("Tentando fallback com pandas DataFrame...")
                     
                     # Fallback: método anterior com pandas
                     if "mean" in df.columns:
