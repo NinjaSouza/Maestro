@@ -41,13 +41,27 @@ import numpy as np
 import openmc
 import openmc.deplete
 
-try:
-    from pyne.material import Material as _PyNEMat
-    from pyne import nucname as _pync
-    from pyne import nucdata as _pynucdata
-    _PYNE = True
-except ImportError:
-    _PYNE = False
+# FIX V245: Imports condicionais do PyNE — só importar se THERMAL_COUPLING=true
+# Isso evita erros quando PyNE não está disponível e respeita o modo openMC-only
+_PYNE = False
+_PyNEMat = None
+_pync = None
+_pynucdata = None
+
+def _load_pyne_if_needed():
+    """Carrega PyNE sob demanda apenas quando necessário."""
+    global _PYNE, _PyNEMat, _pync, _pynucdata
+    if _PYNE or _PyNEMat is not None:
+        return _PYNE
+    try:
+        from pyne.material import Material as _PyNEMat
+        from pyne import nucname as _pync
+        from pyne import nucdata as _pynucdata
+        _PYNE = True
+        return True
+    except ImportError:
+        _PYNE = False
+        return False
 
 from config import PhysicsConstants, SourceCalibrationConfig, GeometryContract
 
@@ -198,24 +212,29 @@ class SimulationRunner:
         # ──────────────────────────────────────────────────────────────────────
         # FIX V237.1: IndependentOperator — usar APENAS source_rates, sem flux
         # ──────────────────────────────────────────────────────────────────────
-        # Problema anterior: código misturava flux e source_rate na construção
-        # do operador, criando inconsistência dimensional (flux [n/cm²/s] vs
-        # source_rate [n/s]) que contaminava depleção e normalização interna.
+        # ──────────────────────────────────────────────────────────────────────
+        # FIX V245: Normalização física correta para produção de Mo99
+        # ──────────────────────────────────────────────────────────────────────
+        # Problema anterior: normalization_mode="source-rate" apenas escala as
+        # taxas de reação proporcionalmente ao source_rate, mas não garante
+        # que o fluxo resultante no alvo seja o fluxo físico correto.
         #
-        # IndependentOperator espera:
-        #   - materials: lista de materiais OpenMC
-        #   - source_rates: lista de [n/s] por timestep (potência da fonte)
-        #   - normalization_mode: \"source-rate\" usa source_rates diretamente
+        # Para produção de Mo99 via fissão de U235, devemos usar:
+        #   - normalization_mode="fission-q": OpenMC calcula potência de fissão
+        #     baseada nas taxas de reação e Q-values do chain file
+        #   - OU: usar eigenvalue mode com k-eff e calcular source_rate baseado
+        #     na potência desejada
         #
-        # NÃO passar flux, area, ou qualquer grandeza derivada — apenas source_rates.
-        # O próprio OpenMC faz a normalização interna baseada no chain file e
-        # nas taxas de reação dos tallies.
+        # Em modo THERMAL_COUPLING=false (openMC-only), usamos fission-q para
+        # garantir consistência física entre source_rate, fluxo e produção de Mo99.
         # ──────────────────────────────────────────────────────────────────────
         
-        norm_mode = self.sp.get("_depletion_normalization", "source-rate")
+        # Forçar normalization_mode="fission-q" para produção física correta
+        norm_mode = "fission-q"
         
         # Obter source_rates de system_params (preenchido por maestro com dados do settings.py)
-        # settings.py já calculou source_rate = flux × area corretamente em Phase C
+        # Em modo fission-q, source_rates representa a potência da fonte que será
+        # usada pelo OpenMC para calcular as taxas de fissão corretamente
         source_rates_list = self.sp.get("_source_rates")
         if not source_rates_list:
             # Fallback: usa source_rate único calculado em _calc_source_rate()
@@ -769,7 +788,8 @@ class SimulationRunner:
             self.logger.info("thermal_coupling=False — skipping PyNE cooling (openMC-only mode)")
             return None
         
-        if not _PYNE:
+        # FIX V245: Carregar PyNE sob demanda apenas quando necessário
+        if not _load_pyne_if_needed():
             self.logger.error("PyNE não instalado — cooling indisponível.")
             return None
 
@@ -1181,23 +1201,36 @@ class SimulationRunner:
 
     def _calc_source_rate_direct(self) -> Optional[float]:
         """
-        FIX V244: Calcula source_rate diretamente sem calibração.
+        FIX V244/V245: Calcula source_rate diretamente sem calibração.
         Usado apenas em modo THERMAL_COUPLING=false (openMC-only mode).
         
-        Retorna: source_rate = flux × area [n/s]
+        Para produção de Mo99 via fissão, o source_rate deve representar a
+        potência da fonte que produz o fluxo desejado no alvo. O cálculo
+        flux × area é uma estimativa inicial, mas o OpenMC com normalization_mode
+        = "fission-q" ajustará internamente baseado nas taxas de fissão do U235.
+        
+        Retorna: source_rate [n/s] para usar com fission-q normalization
         """
         x = float(self.sp.get("wafer_x_cm", self.sp.get("x", 1.69)))
         y = float(self.sp.get("wafer_y_cm", self.sp.get("y", 1.69)))
-        flux = float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))
+        flux_target = float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))
         
-        source_rate = flux * x * y
+        # Estimativa inicial: source_rate = flux × area
+        # O OpenMC ajustará internamente via fission-q normalization
+        area = x * y
+        source_rate = flux_target * area
+        
         if source_rate < 1.0:
             self.logger.error("source_rate direto=%.3e < 1 n/s — inválido", source_rate)
             return None
         
         self.logger.info(
-            "source_rate direto calculado: %.4e n/s (flux=%.4e × area=%.4f cm²)",
-            source_rate, flux, x * y
+            "source_rate direto calculado: %.4e n/s (flux_target=%.4e × area=%.4f cm²)",
+            source_rate, flux_target, area
+        )
+        self.logger.info(
+            "Nota: OpenMC usará normalization_mode='fission-q' para calcular "
+            "potência de fissão correta baseada no chain file e Q-values"
         )
         return source_rate
 
