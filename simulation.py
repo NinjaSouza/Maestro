@@ -213,24 +213,25 @@ class SimulationRunner:
         # FIX V237.1: IndependentOperator — usar APENAS source_rates, sem flux
         # ──────────────────────────────────────────────────────────────────────
         # ──────────────────────────────────────────────────────────────────────
-        # FIX V245: Normalização física correta para produção de Mo99
+        # FIX V246: Correção crítica — IndependentOperator requer normalization_mode="source-rate"
         # ──────────────────────────────────────────────────────────────────────
-        # Problema anterior: normalization_mode="source-rate" apenas escala as
-        # taxas de reação proporcionalmente ao source_rate, mas não garante
-        # que o fluxo resultante no alvo seja o fluxo físico correto.
+        # Problema V245: normalization_mode="fission-q" foi usado incorretamente.
+        # No IndependentOperator com fonte externa:
+        #   - source_rates DEVE estar em n/s (taxa de emissão de neutrons da fonte)
+        #   - normalization_mode DEVE ser "source-rate" para escalonar as taxas de reação
+        #     proporcionalmente à intensidade da fonte
         #
-        # Para produção de Mo99 via fissão de U235, devemos usar:
-        #   - normalization_mode="fission-q": OpenMC calcula potência de fissão
-        #     baseada nas taxas de reação e Q-values do chain file
-        #   - OU: usar eigenvalue mode com k-eff e calcular source_rate baseado
-        #     na potência desejada
+        # O modo "fission-q" é apenas para CoupledOperator em problemas críticos
+        # (eigenvalue), onde a potência de fissão é usada para normalizar o fluxo.
         #
-        # Em modo THERMAL_COUPLING=false (openMC-only), usamos fission-q para
-        # garantir consistência física entre source_rate, fluxo e produção de Mo99.
+        # Para produção de Mo99 com fonte externa de neutrons:
+        #   1. Calibração ajusta source_rate [n/s] para atingir fluxo alvo no alvo
+        #   2. OpenMC usa source-rate para calcular taxas de reação corretas
+        #   3. Depleção conserva massa fisicamente
         # ──────────────────────────────────────────────────────────────────────
         
-        # Forçar normalization_mode="fission-q" para produção física correta
-        norm_mode = "fission-q"
+        # Corrigir: usar source-rate para IndependentOperator
+        norm_mode = "source-rate"
         
         # Obter source_rates de system_params (preenchido por maestro com dados do settings.py)
         # Em modo fission-q, source_rates representa a potência da fonte que será
@@ -1201,22 +1202,27 @@ class SimulationRunner:
 
     def _calc_source_rate_direct(self) -> Optional[float]:
         """
-        FIX V244/V245: Calcula source_rate diretamente sem calibração.
+        FIX V246: Calcula source_rate diretamente sem calibração.
         Usado apenas em modo THERMAL_COUPLING=false (openMC-only mode).
         
-        Para produção de Mo99 via fissão, o source_rate deve representar a
-        potência da fonte que produz o fluxo desejado no alvo. O cálculo
-        flux × area é uma estimativa inicial, mas o OpenMC com normalization_mode
-        = "fission-q" ajustará internamente baseado nas taxas de fissão do U235.
+        Para produção de Mo99 via fissão com fonte externa, o source_rate
+        representa a taxa de emissão de neutrons da fonte [n/s]. O OpenMC
+        usa normalization_mode="source-rate" para escalonar as taxas de
+        reação proporcionalmente à intensidade da fonte.
         
-        Retorna: source_rate [n/s] para usar com fission-q normalization
+        O cálculo flux × area fornece uma estimativa inicial do source_rate
+        necessário para atingir o fluxo alvo no alvo, assumindo que a geometria
+        e a eficiência de transporte foram corretamente modeladas.
+        
+        Retorna: source_rate [n/s] para usar com source-rate normalization
         """
         x = float(self.sp.get("wafer_x_cm", self.sp.get("x", 1.69)))
         y = float(self.sp.get("wafer_y_cm", self.sp.get("y", 1.69)))
         flux_target = float(self.sp.get("flux", self.sp.get("fluxo", 1e13)))
         
         # Estimativa inicial: source_rate = flux × area
-        # O OpenMC ajustará internamente via fission-q normalization
+        # Esta é uma aproximação que assume eficiência geométrica ~100%
+        # Em cenários reais, pode ser necessário um fator de correção
         area = x * y
         source_rate = flux_target * area
         
@@ -1229,8 +1235,8 @@ class SimulationRunner:
             source_rate, flux_target, area
         )
         self.logger.info(
-            "Nota: OpenMC usará normalization_mode='fission-q' para calcular "
-            "potência de fissão correta baseada no chain file e Q-values"
+            "Nota: OpenMC usará normalization_mode='source-rate' para escalonar "
+            "taxas de reação proporcionalmente à intensidade da fonte"
         )
         return source_rate
 
