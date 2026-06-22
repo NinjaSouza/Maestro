@@ -44,6 +44,7 @@ import openmc.deplete
 try:
     from pyne.material import Material as _PyNEMat
     from pyne import nucname as _pync
+    from pyne import nucdata as _pynucdata
     _PYNE = True
 except ImportError:
     _PYNE = False
@@ -810,8 +811,11 @@ class SimulationRunner:
                 try:
                     atomic_mass = _pynucdata.atomic_mass(pyne_id)  # em amu (g/mol)
                 except Exception:
-                    # Fallback seguro: usar número de massa (A)
-                    A = int(_pynucname.aname(pyne_id))
+                    # Fallback seguro: usar número de massa (A) via nucname
+                    try:
+                        A = int(_pync.aname(pyne_id))
+                    except Exception:
+                        A = int(pyne_id % 1000)  # Extrai A do ZAID se falhar
                     atomic_mass = float(A)
                     self.logger.debug(f"Usando massa aproximada {A} para {nuc_str}")
 

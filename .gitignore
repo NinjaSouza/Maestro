@@ -1,31 +1,51 @@
-```
-# Python
-__pycache__/
+```python
+# Compiled and build artifacts
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-.ENV
-.ENV.local
+__pycache__/
 
-# Generated coverage testing files
-.coverage*
-htmlcov/
-.pytest_cache/
-.mypy_cache/
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
 
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# Logs
-*.log
+# Editors
+.vscode/
+.idea/
 
-# OS generated files
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# Python specific
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# System files
 .DS_Store
 Thumbs.db
+```
+
+Wait, let me reconsider. The only modified files are `simulation.py` and `source_calibration.py`, which are Python source files. There are no build artifacts, dependency directories, or temporary files in the change list that would warrant adding ignore rules.
+
+```python
+
 ```

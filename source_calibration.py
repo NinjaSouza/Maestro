@@ -421,49 +421,75 @@ class SourceCalibrator:
                         logger.debug("Linha %d - mean: %r (tipo: %s)", idx, mean_val, type(mean_val))
                 
                 # Extrai fluxo médio (por partícula-fonte) e incerteza
-                # FIX V240b: Extração robusta para OpenMC 0.15.3
-                # O problema é que df["mean"] pode conter arrays numpy quando há múltiplos filtros
-                # Solução: iterar sobre todas as linhas e somar todos os valores numéricos
+                # FIX V240b/V242: Extração robusta para OpenMC 0.15.3
+                # O problema é que df[\"mean\"] pode conter arrays numpy quando há múltiplos filtros
+                # Solução V242: Usar diretamente tally.mean com reshape adequado
                 mean_flux_per_particle = 0.0
                 std_flux = 0.0
                 
-                if "mean" in df.columns:
-                    for idx, row in df.iterrows():
-                        mean_val = row["mean"]
-                        # Se mean_val for um array/numpy array, soma seus elementos
-                        if hasattr(mean_val, '__iter__') and not isinstance(mean_val, str):
-                            try:
-                                mean_flux_per_particle += float(np.sum(np.asarray(mean_val)))
-                            except (TypeError, ValueError) as e:
-                                logger.warning("Erro ao processar mean_val na linha %d: %s", idx, e)
-                                pass
-                        else:
-                            try:
-                                mean_flux_per_particle += float(mean_val)
-                            except (TypeError, ValueError) as e:
-                                logger.warning("Erro ao converter mean_val na linha %d: %s", idx, e)
-                                pass
-                    logger.info("Fluxo médio total (soma de %d linhas): %.6e", len(df), mean_flux_per_particle)
-                else:
-                    logger.error("Coluna 'mean' não encontrada no DataFrame do tally")
-                    return 0.0, 0.0, 0.0
-                
-                if "std. dev." in df.columns:
-                    for idx, row in df.iterrows():
-                        std_val = row["std. dev."]
-                        if hasattr(std_val, '__iter__') and not isinstance(std_val, str):
-                            try:
-                                std_flux += float(np.sum(np.asarray(std_val)))
-                            except (TypeError, ValueError):
-                                pass
-                        else:
-                            try:
-                                std_flux += float(std_val)
-                            except (TypeError, ValueError):
-                                pass
-                    logger.info("Desvio padrão total (soma de %d linhas): %.6e", len(df), std_flux)
-                else:
-                    std_flux = 0.0
+                try:
+                    # Método direto: acessar tally.mean e tally.std_dev diretamente
+                    # Isso evita problemas com pandas DataFrame e arrays aninhados
+                    tally_mean = tally.mean
+                    tally_std = tally.std_dev
+                    
+                    logger.debug(\"tally.mean shape: %s, tipo: %s\", 
+                                np.shape(tally_mean), type(tally_mean))
+                    
+                    # Soma todos os valores de fluxo (integra sobre todas as dimensões)
+                    if tally_mean is not None and np.size(tally_mean) > 0:
+                        mean_flux_per_particle = float(np.sum(tally_mean))
+                        logger.info(\"Fluxo médio (tally.mean): %.6e", mean_flux_per_particle)
+                    else:
+                        logger.warning(\"tally.mean está vazio ou None")
+                    
+                    if tally_std is not None and np.size(tally_std) > 0:
+                        std_flux = float(np.sum(tally_std))
+                        logger.info(\"Desvio padrão (tally.std_dev): %.6e", std_flux)
+                    else:
+                        std_flux = 0.0
+                        
+                except Exception as e:
+                    logger.warning(\"Erro ao usar tally.mean diretamente: %s", e)
+                    logger.info(\"Tentando fallback com pandas DataFrame...")
+                    
+                    # Fallback: método anterior com pandas
+                    if "mean" in df.columns:
+                        for idx, row in df.iterrows():
+                            mean_val = row["mean"]
+                            if hasattr(mean_val, '__iter__') and not isinstance(mean_val, str):
+                                try:
+                                    mean_flux_per_particle += float(np.sum(np.asarray(mean_val)))
+                                except (TypeError, ValueError) as e2:
+                                    logger.warning("Erro ao processar mean_val na linha %d: %s", idx, e2)
+                                    pass
+                            else:
+                                try:
+                                    mean_flux_per_particle += float(mean_val)
+                                except (TypeError, ValueError) as e2:
+                                    logger.warning("Erro ao converter mean_val na linha %d: %s", idx, e2)
+                                    pass
+                        logger.info("Fluxo médio total (DataFrame fallback): %.6e", mean_flux_per_particle)
+                    else:
+                        logger.error("Coluna 'mean' não encontrada no DataFrame do tally")
+                        return 0.0, 0.0, 0.0
+                    
+                    if "std. dev." in df.columns:
+                        for idx, row in df.iterrows():
+                            std_val = row["std. dev."]
+                            if hasattr(std_val, '__iter__') and not isinstance(std_val, str):
+                                try:
+                                    std_flux += float(np.sum(np.asarray(std_val)))
+                                except (TypeError, ValueError):
+                                    pass
+                            else:
+                                try:
+                                    std_flux += float(std_val)
+                                except (TypeError, ValueError):
+                                    pass
+                        logger.info("Desvio padrão total (DataFrame fallback): %.6e", std_flux)
+                    else:
+                        std_flux = 0.0
                 
                 # Obtém volume da região de calibração
                 # O volume está nos filtros ou pode ser calculado da geometria
